@@ -84,17 +84,17 @@ def create_customer():
     database = get_db()
 
     try:
-        cursor = database.execute(
-            "INSERT INTO customers(name, phone_number) VALUES (?, ?)",
+        created = database.execute(
+            "INSERT INTO customers(name, phone_number) VALUES (?, ?) RETURNING customer_id",
             (name.strip(), phone_number.strip()),
-        )
+        ).fetchone()
         customer = database.execute(
             """
             SELECT customer_id, name, phone_number, created_at, updated_at
             FROM customers
             WHERE customer_id = ?
             """,
-            (cursor.lastrowid,),
+            (created["customer_id"],),
         ).fetchone()
         database.commit()
         return jsonify(dict(customer)), 201

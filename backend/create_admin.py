@@ -29,7 +29,7 @@ with app.app_context():
         if not name:
             raise SystemExit("Admin name is required.")
         username = name.casefold()
-        database.execute("BEGIN IMMEDIATE")
+        database.begin()
         username_exists = database.execute(
             "SELECT 1 FROM customers WHERE username = ? UNION ALL SELECT 1 FROM admins WHERE username = ? LIMIT 1",
             (username, username),

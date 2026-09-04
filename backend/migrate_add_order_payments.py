@@ -1,25 +1,7 @@
-"""Add simple payment-tracking fields to existing orders."""
+"""Compatibility entry point; the main initializer handles all engines."""
 
 from app import create_app
-from app.db import get_db
+from init_db import initialize_database
 
 
-app = create_app()
-with app.app_context():
-    database = get_db()
-    try:
-        columns = {row["name"] for row in database.execute("PRAGMA table_info(orders)")}
-        if "payment_status" not in columns:
-            database.execute("""ALTER TABLE orders ADD COLUMN payment_status TEXT
-                              NOT NULL DEFAULT 'unpaid'
-                              CHECK (payment_status IN ('unpaid', 'paid'))""")
-        if "payment_method" not in columns:
-            database.execute("""ALTER TABLE orders ADD COLUMN payment_method TEXT
-                              CHECK (payment_method IN ('cash', 'mpesa', 'bank_transfer'))""")
-        if "paid_at" not in columns:
-            database.execute("ALTER TABLE orders ADD COLUMN paid_at TEXT")
-        database.commit()
-        print("Order payment migration completed successfully.")
-    except Exception:
-        database.rollback()
-        raise
+initialize_database(create_app())

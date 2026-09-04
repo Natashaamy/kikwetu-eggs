@@ -5,7 +5,7 @@ import sqlite3
 from flask import Blueprint, jsonify, session
 
 from ..auth import customer_required
-from ..db import get_db
+from ..db import get_db, item_summary_expression
 
 
 customer_portal_bp = Blueprint("customer_portal", __name__, url_prefix="/api/customer")
@@ -13,7 +13,7 @@ customer_portal_bp = Blueprint("customer_portal", __name__, url_prefix="/api/cus
 
 def order_rows(database, customer_id):
     return database.execute(
-        """
+        f"""
         SELECT orders.order_id, orders.order_number, orders.order_status,
                orders.payment_status, orders.payment_method, orders.paid_at,
                orders.total_amount, orders.created_at,
@@ -26,7 +26,7 @@ def order_rows(database, customer_id):
                (SELECT mt.mpesa_receipt_number FROM mpesa_transactions AS mt
                 WHERE mt.order_id = orders.order_id AND mt.status = 'successful'
                 ORDER BY mt.transaction_id DESC LIMIT 1) AS mpesa_receipt_number,
-               COALESCE(GROUP_CONCAT(products.name || ' × ' || order_items.quantity, ', '), 'No items') AS products,
+               COALESCE({item_summary_expression()}, 'No items') AS products,
                COALESCE(SUM(order_items.quantity), 0) AS quantity
         FROM orders
         LEFT JOIN order_items ON order_items.order_id = orders.order_id
@@ -76,7 +76,7 @@ def customer_orders():
 def cancel_customer_order(order_id):
     database = get_db()
     try:
-        database.execute("BEGIN IMMEDIATE")
+        database.begin()
         order = database.execute("SELECT order_status, payment_status FROM orders WHERE order_id = ? AND customer_id = ?", (order_id, session["user_id"])).fetchone()
         if order is None:
             database.rollback()

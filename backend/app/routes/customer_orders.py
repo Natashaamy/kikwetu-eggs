@@ -27,7 +27,7 @@ def place_customer_order():
 
     database = get_db()
     try:
-        database.execute("BEGIN IMMEDIATE")
+        database.begin()
         product = database.execute(
             """SELECT product_id, name, unit_name, unit_price, is_active,
                       stock_quantity
@@ -48,11 +48,12 @@ def place_customer_order():
             }), 400
 
         temporary_number = f"PENDING-{uuid4().hex}"
-        cursor = database.execute(
-            "INSERT INTO orders(customer_id, order_number, order_status, total_amount) VALUES (?, ?, 'pending', 0)",
+        created_order = database.execute(
+            """INSERT INTO orders(customer_id, order_number, order_status, total_amount)
+               VALUES (?, ?, 'pending', 0) RETURNING order_id""",
             (session["user_id"], temporary_number),
-        )
-        order_id = cursor.lastrowid
+        ).fetchone()
+        order_id = created_order["order_id"]
         order_number = f"ORD-{order_id:06d}"
         if database.execute("SELECT 1 FROM orders WHERE order_number = ? AND order_id != ?", (order_number, order_id)).fetchone():
             order_number = f"{order_number}-{uuid4().hex[:4].upper()}"

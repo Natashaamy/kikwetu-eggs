@@ -3,8 +3,9 @@
 from pathlib import Path
 import os
 import secrets
+import sqlite3
 
-from flask import Flask
+from flask import Flask, jsonify
 
 from .db import close_db
 from .routes.auth_routes import auth_bp
@@ -24,6 +25,7 @@ def create_app(test_config=None):
     app = Flask(__name__)
     app.config.from_mapping(
         DATABASE=Path(app.instance_path) / "chicken_business.db",
+        DATABASE_URL=os.environ.get("DATABASE_URL"),
         SECRET_KEY=os.environ.get("SECRET_KEY") or secrets.token_hex(32),
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
@@ -45,5 +47,10 @@ def create_app(test_config=None):
     app.register_blueprint(products_bp)
     app.register_blueprint(reports_bp)
     app.register_blueprint(mpesa_payments_bp)
+
+    @app.errorhandler(sqlite3.Error)
+    def handle_database_error(error):
+        app.logger.error("A database operation failed", exc_info=error)
+        return jsonify({"error": "The database is temporarily unavailable"}), 500
 
     return app

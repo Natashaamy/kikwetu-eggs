@@ -4,7 +4,7 @@ import sqlite3
 
 from flask import Blueprint, jsonify, request
 
-from ..db import get_db
+from ..db import get_db, item_summary_expression
 from ..auth import admin_required
 
 
@@ -24,7 +24,7 @@ def get_orders():
 
     try:
         rows = database.execute(
-            """
+            f"""
             SELECT
                 orders.order_id,
                 orders.customer_id,
@@ -38,14 +38,12 @@ def get_orders():
                 orders.notes,
                 orders.created_at,
                 orders.updated_at,
-                COALESCE(GROUP_CONCAT(
-                    products.name || ' × ' || order_items.quantity, ', '
-                ), 'No items') AS item_summary
+                COALESCE({item_summary_expression()}, 'No items') AS item_summary
             FROM orders
             JOIN customers ON customers.customer_id = orders.customer_id
             LEFT JOIN order_items ON order_items.order_id = orders.order_id
             LEFT JOIN products ON products.product_id = order_items.product_id
-            GROUP BY orders.order_id
+            GROUP BY orders.order_id, customers.name
             ORDER BY orders.created_at DESC, orders.order_id DESC
             """
         ).fetchall()
@@ -143,7 +141,7 @@ def record_order_payment(order_id):
 
     database = get_db()
     try:
-        database.execute("BEGIN IMMEDIATE")
+        database.begin()
         order = database.execute(
             "SELECT order_id, order_status, payment_status FROM orders WHERE order_id = ?",
             (order_id,),
@@ -230,7 +228,7 @@ def create_order_item(order_id):
     database = get_db()
 
     try:
-        database.execute("BEGIN IMMEDIATE")
+        database.begin()
         order = database.execute(
             "SELECT order_id, order_status, payment_status FROM orders WHERE order_id = ?",
             (order_id,),
@@ -269,13 +267,13 @@ def create_order_item(order_id):
         unit_price = product["unit_price"]
         line_total = quantity * unit_price
 
-        cursor = database.execute(
+        created_item = database.execute(
             """
             INSERT INTO order_items(order_id, product_id, quantity, unit_price, line_total)
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?) RETURNING order_item_id
             """,
             (order_id, product_id, quantity, unit_price, line_total),
-        )
+        ).fetchone()
         stock_update = database.execute(
             """UPDATE products
                SET stock_quantity = stock_quantity - ?, updated_at = CURRENT_TIMESTAMP
@@ -311,7 +309,7 @@ def create_order_item(order_id):
             FROM order_items
             WHERE order_item_id = ?
             """,
-            (cursor.lastrowid,),
+            (created_item["order_item_id"],),
         ).fetchone()
         database.commit()
         return jsonify(dict(order_item)), 201
@@ -333,7 +331,7 @@ def delete_order(order_id):
     database = get_db()
 
     try:
-        database.execute("BEGIN IMMEDIATE")
+        database.begin()
         existing_order = database.execute(
             "SELECT order_id, order_status, payment_status FROM orders WHERE order_id = ?",
             (order_id,),
@@ -346,7 +344,6 @@ def delete_order(order_id):
         if existing_order["order_status"] != "cancelled":
             return jsonify({"error": "Only cancelled orders can be deleted"}), 409
 
-        database.execute("BEGIN")
         database.execute(
             "DELETE FROM orders WHERE order_id = ?",
             (order_id,),
@@ -578,7 +575,7 @@ def create_order():
     database = get_db()
 
     try:
-        cursor = database.execute(
+        created_order = database.execute(
             """
             INSERT INTO orders(
                 customer_id,
@@ -587,14 +584,14 @@ def create_order():
                 total_amount,
                 notes
             )
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?) RETURNING order_id
             """,
             (customer_id, order_number, order_status, total_amount, notes),
-        )
+        ).fetchone()
         database.commit()
         return jsonify({
             "message": "Order created successfully",
-            "order_id": cursor.lastrowid,
+            "order_id": created_order["order_id"],
         }), 201
     except sqlite3.IntegrityError:
         database.rollback()

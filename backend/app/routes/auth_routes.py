@@ -41,7 +41,7 @@ def register_customer():
     try:
         clean_name = " ".join(name.strip().split())
         clean_username = normalize_login_name(clean_name)
-        database.execute("BEGIN IMMEDIATE")
+        database.begin()
         username_exists = database.execute(
             "SELECT 1 FROM customers WHERE username = ? UNION ALL SELECT 1 FROM admins WHERE username = ? LIMIT 1",
             (clean_username, clean_username),
@@ -52,15 +52,17 @@ def register_customer():
         if database.execute("SELECT 1 FROM customers WHERE phone_number = ?", (phone_number.strip(),)).fetchone():
             database.rollback()
             return jsonify({"error": "An account with this phone number already exists"}), 400
-        cursor = database.execute(
-            "INSERT INTO customers(name, username, phone_number, password_hash) VALUES (?, ?, ?, ?)",
+        customer = database.execute(
+            """INSERT INTO customers(name, username, phone_number, password_hash)
+               VALUES (?, ?, ?, ?) RETURNING customer_id""",
             (clean_name, clean_username, phone_number.strip(), generate_password_hash(password)),
-        )
+        ).fetchone()
+        customer_id = customer["customer_id"]
         database.commit()
         session.clear()
-        session["user_id"] = cursor.lastrowid
+        session["user_id"] = customer_id
         session["role"] = "customer"
-        return jsonify({"authenticated": True, "message": "Registration successful", "role": "customer", "user": {"customer_id": cursor.lastrowid, "name": clean_name, "username": clean_username, "phone_number": phone_number.strip()}}), 201
+        return jsonify({"authenticated": True, "message": "Registration successful", "role": "customer", "user": {"customer_id": customer_id, "name": clean_name, "username": clean_username, "phone_number": phone_number.strip()}}), 201
     except sqlite3.IntegrityError:
         database.rollback()
         return jsonify({"error": "An account with this name or phone number already exists"}), 400
@@ -119,7 +121,7 @@ def get_current_user():
         if role == "customer":
             user = database.execute("SELECT customer_id, name, username, phone_number FROM customers WHERE customer_id = ?", (user_id,)).fetchone()
         else:
-            user = database.execute("SELECT admin_id, name, username FROM admins WHERE admin_id = ? AND is_active = 1", (user_id,)).fetchone()
+            user = database.execute("SELECT admin_id, name, username FROM admins WHERE admin_id = ? AND is_active", (user_id,)).fetchone()
         if user is None:
             session.clear()
             return jsonify({"authenticated": False}), 200

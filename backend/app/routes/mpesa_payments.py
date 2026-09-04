@@ -72,7 +72,7 @@ def stk_push():
             order_number=order["order_number"],
         )
 
-        database.execute("BEGIN IMMEDIATE")
+        database.begin()
         current_order = database.execute(
             """SELECT order_status, payment_status FROM orders
                WHERE order_id = ? AND customer_id = ?""",
@@ -166,7 +166,7 @@ def callback():
     current_app.logger.info("M-Pesa callback received for checkout %s", checkout_request_id)
     database = get_db()
     try:
-        database.execute("BEGIN IMMEDIATE")
+        database.begin()
         transaction = database.execute(
             """SELECT transaction_id, order_id, amount, status
                FROM mpesa_transactions WHERE checkout_request_id = ?""",

@@ -167,7 +167,7 @@ def update_product(product_id):
                 "unit_price" in provided_fields,
                 unit_price,
                 "is_active" in provided_fields,
-                int(is_active) if "is_active" in provided_fields else None,
+                bool(is_active) if "is_active" in provided_fields else None,
                 product_id,
             ),
         )
@@ -216,7 +216,7 @@ def add_product_stock(product_id):
 
     database = get_db()
     try:
-        database.execute("BEGIN IMMEDIATE")
+        database.begin()
         product = database.execute(
             "SELECT product_id FROM products WHERE product_id = ?",
             (product_id,),
@@ -271,7 +271,7 @@ def set_product_stock(product_id):
 
     database = get_db()
     try:
-        database.execute("BEGIN IMMEDIATE")
+        database.begin()
         product = database.execute(
             "SELECT product_id FROM products WHERE product_id = ?",
             (product_id,),
@@ -381,21 +381,21 @@ def create_product():
 
     try:
         if "is_active" in data:
-            cursor = database.execute(
+            created = database.execute(
                 """
                 INSERT INTO products(name, description, unit_name, unit_price, is_active)
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?) RETURNING product_id
                 """,
-                (name.strip(), description, unit_name.strip(), unit_price, int(is_active)),
-            )
+                (name.strip(), description, unit_name.strip(), unit_price, bool(is_active)),
+            ).fetchone()
         else:
-            cursor = database.execute(
+            created = database.execute(
                 """
                 INSERT INTO products(name, description, unit_name, unit_price)
-                VALUES (?, ?, ?, ?)
+                VALUES (?, ?, ?, ?) RETURNING product_id
                 """,
                 (name.strip(), description, unit_name.strip(), unit_price),
-            )
+            ).fetchone()
 
         product = database.execute(
             """
@@ -413,7 +413,7 @@ def create_product():
             FROM products
             WHERE product_id = ?
             """,
-            (cursor.lastrowid,),
+            (created["product_id"],),
         ).fetchone()
         database.commit()
         return jsonify(dict(product)), 201

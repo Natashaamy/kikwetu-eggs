@@ -3,6 +3,7 @@
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,8 +18,8 @@ class MpesaTests(unittest.TestCase):
     def setUp(self):
         self.temporary_directory = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.database_path = Path(self.temporary_directory.name) / "test.db"
-        with sqlite3.connect(self.database_path) as database:
-            database.executescript((BACKEND_DIR / "schema.sql").read_text(encoding="utf-8"))
+        with closing(sqlite3.connect(self.database_path)) as database:
+            database.executescript((BACKEND_DIR / "schema_sqlite.sql").read_text(encoding="utf-8"))
             customer_id = database.execute(
                 "INSERT INTO customers(name, phone_number) VALUES (?, ?)",
                 ("Test Customer", "0712345678"),
@@ -28,7 +29,8 @@ class MpesaTests(unittest.TestCase):
                    VALUES (?, 'ORD-000001', 'pending', 200)""",
                 (customer_id,),
             ).lastrowid
-        self.app = create_app({"TESTING": True, "DATABASE": self.database_path, "SECRET_KEY": "test"})
+            database.commit()
+        self.app = create_app({"TESTING": True, "DATABASE_URL": None, "DATABASE": self.database_path, "SECRET_KEY": "test"})
         self.client = self.app.test_client()
 
     def tearDown(self):
@@ -74,25 +76,26 @@ class MpesaTests(unittest.TestCase):
         initiate.assert_called_once_with(
             phone_number="0712345678", amount=200, order_number="ORD-000001"
         )
-        with sqlite3.connect(self.database_path) as database:
+        with closing(sqlite3.connect(self.database_path)) as database:
             saved = database.execute(
                 "SELECT customer_id, amount, status FROM mpesa_transactions WHERE checkout_request_id = 'checkout-2'"
             ).fetchone()
         self.assertEqual(saved, (1, 200, "pending"))
 
     def test_successful_callback_is_idempotent(self):
-        with sqlite3.connect(self.database_path) as database:
+        with closing(sqlite3.connect(self.database_path)) as database:
             database.execute(
                 """INSERT INTO mpesa_transactions(
                        order_id, customer_id, merchant_request_id, checkout_request_id,
                        phone_number, amount, status
                    ) VALUES (1, 1, 'merchant-1', 'checkout-1', '254712345678', 200, 'pending')"""
             )
+            database.commit()
         first = self.client.post("/api/payments/mpesa/callback", json=self.callback_payload())
         second = self.client.post("/api/payments/mpesa/callback", json=self.callback_payload())
         self.assertEqual(first.status_code, 200)
         self.assertEqual(second.status_code, 200)
-        with sqlite3.connect(self.database_path) as database:
+        with closing(sqlite3.connect(self.database_path)) as database:
             order = database.execute(
                 "SELECT payment_status, payment_method FROM orders WHERE order_id = 1"
             ).fetchone()

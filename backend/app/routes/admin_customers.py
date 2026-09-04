@@ -122,7 +122,7 @@ def delete_customer(customer_id):
     database = get_db()
 
     try:
-        database.execute("BEGIN IMMEDIATE")
+        database.begin()
         customer = database.execute(
             "SELECT customer_id FROM customers WHERE customer_id = ?",
             (customer_id,),

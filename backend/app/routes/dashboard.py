@@ -47,7 +47,7 @@ def get_dashboard():
             """
             SELECT
                 COUNT(*) AS total_products,
-                COALESCE(SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END), 0)
+                COALESCE(SUM(CASE WHEN is_active THEN 1 ELSE 0 END), 0)
                     AS active_products,
                 COALESCE(SUM(CASE WHEN stock_quantity = 0 THEN 1 ELSE 0 END), 0)
                     AS out_of_stock_products,
