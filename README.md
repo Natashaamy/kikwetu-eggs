@@ -102,6 +102,23 @@ administrator only when no administrator with that username or email exists.
 The password is never printed or stored as plain text. After the account exists,
 the four initial-admin variables can be removed from Render.
 
+### Temporarily resetting an administrator password
+
+If an existing administrator's password is lost and Render Shell is not
+available, temporarily set both of these Render environment variables:
+
+- `RESET_ADMIN_USERNAME` — the existing administrator username.
+- `RESET_ADMIN_PASSWORD` — the new plain-text password, supplied only through
+  Render's protected environment settings.
+
+On the next deployment or restart, `init_db.py` normalizes the username, finds
+that administrator, hashes the new password with Werkzeug, and updates only the
+matching administrator's `password_hash`. It does not create an account when
+the username is unknown and never prints the password or hash. Wait for the
+safe `Admin password reset completed.` log message, verify login, and then
+remove both recovery variables immediately. Leaving them configured would
+reset the password again on every service start.
+
 ## Local frontend
 
 ```powershell

@@ -58,6 +58,33 @@ def create_initial_admin(database):
     print("Initial administrator created successfully.")
 
 
+def reset_admin_password(database):
+    """Reset one existing administrator when both recovery variables are set."""
+    username = os.environ.get("RESET_ADMIN_USERNAME", "").strip()
+    password = os.environ.get("RESET_ADMIN_PASSWORD", "")
+    if not username or not password:
+        return
+
+    normalized_username = " ".join(username.split()).casefold()
+    administrator = database.execute(
+        "SELECT admin_id FROM admins WHERE username = ? LIMIT 1",
+        (normalized_username,),
+    ).fetchone()
+    if administrator is None:
+        print("No matching administrator was found; password was not changed.")
+        return
+
+    database.execute(
+        "UPDATE admins SET password_hash = ? WHERE admin_id = ?",
+        (
+            generate_password_hash(password),
+            administrator["admin_id"],
+        ),
+    )
+    database.commit()
+    print("Admin password reset completed.")
+
+
 def initialize_database(app):
     with app.app_context():
         database = get_db()
@@ -65,6 +92,7 @@ def initialize_database(app):
         try:
             database.executescript(schema_file.read_text(encoding="utf-8"))
             create_initial_admin(database)
+            reset_admin_password(database)
             database.commit()
             engine = "PostgreSQL" if is_postgres() else "SQLite"
             print(f"{engine} schema initialization completed safely.")
