@@ -67,6 +67,8 @@ def get_report():
                 COUNT(*) AS total_orders,
                 COALESCE(SUM(CASE WHEN order_status = 'pending' THEN 1 ELSE 0 END), 0)
                     AS pending_orders,
+                COALESCE(SUM(CASE WHEN order_status = 'processing' THEN 1 ELSE 0 END), 0)
+                    AS processing_orders,
                 COALESCE(SUM(CASE WHEN order_status = 'completed' THEN 1 ELSE 0 END), 0)
                     AS completed_orders,
                 COALESCE(SUM(CASE WHEN order_status = 'cancelled' THEN 1 ELSE 0 END), 0)
@@ -157,6 +159,28 @@ def get_report():
             parameters,
         ).fetchall()
 
+        sales_over_time = database.execute(
+            f"""SELECT date(created_at) AS sale_date, COUNT(*) AS orders,
+                       COALESCE(SUM(total_amount), 0) AS revenue
+                FROM orders
+                WHERE order_status = 'completed' AND {period_sql}
+                GROUP BY date(created_at)
+                ORDER BY sale_date""",
+            parameters,
+        ).fetchall()
+
+        recent_orders = database.execute(
+            f"""SELECT orders.order_number, customers.name AS customer_name,
+                       orders.created_at, orders.total_amount, orders.order_status,
+                       orders.payment_status, orders.payment_method
+                FROM orders
+                JOIN customers ON customers.customer_id = orders.customer_id
+                WHERE {period_sql}
+                ORDER BY orders.created_at DESC, orders.order_id DESC
+                LIMIT ?""",
+            [*parameters, 20],
+        ).fetchall()
+
         return jsonify({
             "period": {"from": from_date, "to": to_date},
             "summary": dict(summary),
@@ -164,6 +188,8 @@ def get_report():
             "top_customers": [dict(row) for row in top_customers],
             "recent_completed_orders": [dict(row) for row in recent_completed_orders],
             "payment_methods": [dict(row) for row in payment_methods],
+            "sales_over_time": [dict(row) for row in sales_over_time],
+            "recent_orders": [dict(row) for row in recent_orders],
         }), 200
     except ValueError as error:
         return jsonify({"error": str(error)}), 400

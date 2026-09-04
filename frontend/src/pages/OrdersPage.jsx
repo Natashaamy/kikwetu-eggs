@@ -1,485 +1,71 @@
-import { useEffect, useState } from "react";
-
+import { useEffect, useMemo, useState } from "react";
 import { deleteOrder, getOrder, getOrders, recordOrderPayment, updateOrder } from "../api/orders.js";
 
-const currencyFormatter = new Intl.NumberFormat("en-KE", {
-  style: "currency",
-  currency: "KES",
-  minimumFractionDigits: 0,
-});
+const money = new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES", minimumFractionDigits: 0 });
+const dateFormat = new Intl.DateTimeFormat("en-KE", { dateStyle: "medium", timeStyle: "short" });
+const formatDate = (value) => { if (!value) return "—"; const date = new Date(`${value.replace(" ", "T")}Z`); return Number.isNaN(date.getTime()) ? value : dateFormat.format(date); };
+const title = (value) => value ? value.charAt(0).toUpperCase() + value.slice(1) : "Not selected";
+const methodLabel = (value) => ({ mpesa: "M-Pesa", cash: "Cash", bank_transfer: "Bank Transfer" }[value] || "Not selected");
 
-const dateFormatter = new Intl.DateTimeFormat("en-KE", {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
-
-function formatAmount(amount) {
-  return currencyFormatter.format(Number(amount));
-}
-
-function formatDate(date) {
-  if (!date) {
-    return "Not available";
-  }
-
-  const parsedDate = new Date(`${date.replace(" ", "T")}Z`);
-  return Number.isNaN(parsedDate.getTime()) ? date : dateFormatter.format(parsedDate);
-}
-
-function formatStatus(status) {
-  return status.charAt(0).toUpperCase() + status.slice(1);
-}
-
-function quantityWithUnit(quantity, unit) {
-  return `${quantity} ${unit}${quantity === 1 ? "" : "s"}`;
-}
-
-function paymentMethodLabel(method) {
-  return { cash: "Cash", mpesa: "M-Pesa", bank_transfer: "Bank Transfer" }[method] || "Not recorded";
-}
-
-function OrdersPage() {
+export default function OrdersPage() {
   const [orders, setOrders] = useState([]);
-  const [selectedOrder, setSelectedOrder] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState("");
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState("all");
+  const [payment, setPayment] = useState("all");
+  const [method, setMethod] = useState("all");
+  const [details, setDetails] = useState(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
-  const [detailsError, setDetailsError] = useState("");
-  const [statusUpdating, setStatusUpdating] = useState(false);
-  const [statusError, setStatusError] = useState("");
-  const [statusMessage, setStatusMessage] = useState("");
-  const [statusFilter, setStatusFilter] = useState("active");
-  const [orderToDelete, setOrderToDelete] = useState(null);
-  const [deleting, setDeleting] = useState(false);
-  const [deleteMessage, setDeleteMessage] = useState("");
-  const [deleteError, setDeleteError] = useState("");
-  const [paymentFilter, setPaymentFilter] = useState("all");
   const [paymentOrder, setPaymentOrder] = useState(null);
   const [paymentMethod, setPaymentMethod] = useState("");
-  const [paymentRecording, setPaymentRecording] = useState(false);
-  const [paymentError, setPaymentError] = useState("");
+  const [acting, setActing] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const [deleteOrderTarget, setDeleteOrderTarget] = useState(null);
 
-  const filteredOrders = orders.filter((order) => {
-    if (paymentFilter !== "all" && order.payment_status !== paymentFilter) return false;
-    if (statusFilter === "all") {
-      return true;
-    }
+  useEffect(() => { getOrders().then((data) => setOrders(data.orders || [])).catch(() => setError("Orders could not be loaded.")).finally(() => setLoading(false)); }, []);
+  const summary = useMemo(() => ({ total: orders.length, pending: orders.filter((o) => o.order_status === "pending").length, processing: orders.filter((o) => o.order_status === "processing").length, completed: orders.filter((o) => o.order_status === "completed").length, cancelled: orders.filter((o) => o.order_status === "cancelled").length, paid: orders.filter((o) => o.payment_status === "paid").length, unpaid: orders.filter((o) => o.payment_status === "unpaid" && o.order_status !== "cancelled").length }), [orders]);
+  const visible = useMemo(() => { const term = search.trim().toLowerCase(); return orders.filter((order) => (!term || order.order_number.toLowerCase().includes(term) || order.customer_name.toLowerCase().includes(term)) && (status === "all" || order.order_status === status) && (payment === "all" || order.payment_status === payment) && (method === "all" || order.payment_method === method)); }, [orders, search, status, payment, method]);
 
-    if (statusFilter === "active") {
-      return ["pending", "completed"].includes(order.order_status);
-    }
-
-    return order.order_status === statusFilter;
-  });
-
-  useEffect(() => {
-    let ignoreResult = false;
-
-    async function loadOrders() {
-      try {
-        const data = await getOrders();
-        if (!ignoreResult) {
-          setOrders(data.orders || []);
-        }
-      } catch {
-        if (!ignoreResult) {
-          setLoadError("Orders could not be loaded. Check that the backend is running.");
-        }
-      } finally {
-        if (!ignoreResult) {
-          setLoading(false);
-        }
-      }
-    }
-
-    loadOrders();
-
-    return () => {
-      ignoreResult = true;
-    };
-  }, []);
-
-  async function handleViewOrder(orderId) {
-    setDetailsLoading(true);
-    setDetailsError("");
-    setStatusError("");
-    setStatusMessage("");
-    setSelectedOrder(null);
-
-    try {
-      const order = await getOrder(orderId);
-      setSelectedOrder(order);
-    } catch {
-      setDetailsError("This order could not be loaded. Please try again.");
-    } finally {
-      setDetailsLoading(false);
-    }
+  async function view(orderId) { setDetailsLoading(true); setActionError(""); try { setDetails(await getOrder(orderId)); } catch { setActionError("Order details could not be loaded."); } finally { setDetailsLoading(false); } }
+  function mergeOrder(updated) { setOrders((current) => current.map((order) => order.order_id === updated.order_id ? { ...order, ...updated } : order)); }
+  async function setOrderStatus(order, nextStatus) {
+    if (!window.confirm(`${title(nextStatus)} order ${order.order_number}?`)) return;
+    setActing(true); setActionError("");
+    try { const result = await updateOrder(order.order_id, { order_status: nextStatus }); mergeOrder(result); if (details?.order_id === order.order_id) setDetails(await getOrder(order.order_id)); setMessage(`Order ${order.order_number} marked as ${nextStatus}.`); }
+    catch (requestError) { setActionError(requestError.message); } finally { setActing(false); }
+  }
+  async function recordPayment(event) {
+    event.preventDefault(); if (!paymentMethod) return setActionError("Choose a payment method."); setActing(true); setActionError("");
+    try { const result = await recordOrderPayment(paymentOrder.order_id, paymentMethod); mergeOrder(result); if (details?.order_id === result.order_id) setDetails(await getOrder(result.order_id)); setMessage(result.message); setPaymentOrder(null); setPaymentMethod(""); }
+    catch (requestError) { setActionError(requestError.message); } finally { setActing(false); }
+  }
+  async function permanentlyDelete() {
+    setActing(true); setActionError("");
+    try { const result = await deleteOrder(deleteOrderTarget.order_id); setOrders((current) => current.filter((order) => order.order_id !== deleteOrderTarget.order_id)); if (details?.order_id === deleteOrderTarget.order_id) setDetails(null); setDeleteOrderTarget(null); setMessage(result.message); }
+    catch (requestError) { setActionError(requestError.message); } finally { setActing(false); }
   }
 
-  async function handleMarkCompleted() {
-    if (!selectedOrder) {
-      return;
-    }
-
-    const confirmed = window.confirm("Mark this order as completed?");
-
-    if (!confirmed) {
-      return;
-    }
-
-    setStatusUpdating(true);
-    setStatusError("");
-    setStatusMessage("");
-
-    try {
-      const updatedOrder = await updateOrder(selectedOrder.order_id, {
-        order_status: "completed",
-      });
-      setSelectedOrder(await getOrder(updatedOrder.order_id));
-      setOrders((currentOrders) =>
-        currentOrders.map((order) =>
-          order.order_id === updatedOrder.order_id ? { ...order, ...updatedOrder } : order,
-        ),
-      );
-      setStatusMessage("Order marked as completed.");
-    } catch {
-      setStatusError("The order status could not be updated. Please try again.");
-    } finally {
-      setStatusUpdating(false);
-    }
+  function orderActions(order) {
+    const mpesaPending = order.mpesa_status === "pending";
+    const cashConfirmation = order.order_status === "processing" && order.payment_status === "unpaid" && order.payment_method === "cash";
+    const cancellable = ["pending", "processing"].includes(order.order_status) && order.payment_status === "unpaid" && !mpesaPending;
+    return <div className="admin-order-actions"><button type="button" className="secondary-button" onClick={() => view(order.order_id)}>View Details</button>{cashConfirmation && <button type="button" onClick={() => { setPaymentOrder(order); setPaymentMethod("cash"); setActionError(""); }}>Confirm Cash Payment</button>}{cancellable && <button type="button" className="cancel-order-action" disabled={acting} onClick={() => setOrderStatus(order, "cancelled")}>Cancel</button>}{order.order_status === "cancelled" && <button type="button" className="delete-text-button" onClick={() => { setActionError(""); setDeleteOrderTarget(order); }}>Delete</button>}</div>;
   }
 
-  async function handleDeleteOrder() {
-    if (!orderToDelete) {
-      return;
-    }
+  return <>
+    <section className="page-heading"><div><p className="eyebrow">Order management</p><h1>Orders</h1><p className="page-description">Manage customer orders, payments and fulfillment.</p></div></section>
+    <section className="admin-summary-grid order-summary-grid">{[["Total Orders", summary.total, ""], ["Pending", summary.pending, "pending"], ["Processing", summary.processing, "processing"], ["Completed", summary.completed, "active"], ["Cancelled", summary.cancelled, "inactive"], ["Paid", summary.paid, "active"], ["Unpaid", summary.unpaid, "pending"]].map(([label, value, type]) => <article className={type ? `summary-${type}` : ""} key={label}><span>{label}</span><strong>{value}</strong></article>)}</section>
+    {message && <p className="message success-message list-message" role="status">{message}</p>}{actionError && !paymentOrder && !deleteOrderTarget && <p className="message error-message list-message">{actionError}</p>}
+    <section className="panel admin-list-panel"><div className="admin-toolbar order-filter-toolbar"><label className="search-field">Search orders<input type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Order number or customer" /></label><label>Order status<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="all">All Orders</option><option value="pending">Pending</option><option value="processing">Processing</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select></label><label>Payment<select value={payment} onChange={(e) => setPayment(e.target.value)}><option value="all">All</option><option value="paid">Paid</option><option value="unpaid">Unpaid</option></select></label><label>Method<select value={method} onChange={(e) => setMethod(e.target.value)}><option value="all">All</option><option value="mpesa">M-Pesa</option><option value="cash">Cash</option><option value="bank_transfer">Bank Transfer</option></select></label></div>
+      {loading && <p className="state-message">Loading orders…</p>}{error && <div className="state-message error-state"><strong>Orders unavailable.</strong><span>{error}</span></div>}{!loading && !error && visible.length === 0 && <div className="state-message empty-state"><strong>No matching orders.</strong><span>Try changing the filters.</span></div>}
+      {!loading && !error && visible.length > 0 && <div className="admin-order-grid">{visible.map((order) => <article className="admin-order-card" key={order.order_id}><div className="admin-order-card-top"><div><span className="order-card-label">Order</span><h2>{order.order_number}</h2><p>{order.customer_name}</p></div><strong>{money.format(order.total_amount)}</strong></div><p className="order-item-summary">{order.item_summary} <span>· {order.quantity} unit{order.quantity === 1 ? "" : "s"}</span></p><div className="order-card-status"><span className={`status-badge status-${order.order_status}`}>{title(order.order_status)}</span><span className={`payment-badge payment-${order.payment_status}`}>{title(order.payment_status)}</span><span>{methodLabel(order.payment_method)}</span>{order.mpesa_status === "pending" && <span className="payment-badge payment-pending">M-Pesa Pending</span>}</div><time>{formatDate(order.created_at)}</time>{orderActions(order)}</article>)}</div>}
+    </section>
 
-    setDeleting(true);
-    setDeleteError("");
+    {(details || detailsLoading) && <div className="modal-backdrop" role="presentation"><div className="confirmation-dialog admin-order-detail-modal" role="dialog" aria-modal="true"><div className="dialog-title-row"><div><p className="eyebrow">Order details</p><h2>{details?.order_number || "Loading…"}</h2></div><button type="button" className="dialog-close" onClick={() => setDetails(null)} aria-label="Close">×</button></div>{detailsLoading ? <p className="state-message">Loading details…</p> : details && <><div className="detail-status-row"><span className={`status-badge status-${details.order_status}`}>{title(details.order_status)}</span><span className={`payment-badge payment-${details.payment_status}`}>{title(details.payment_status)}</span>{details.latest_mpesa?.status === "pending" && <span className="payment-badge payment-pending">M-Pesa Pending</span>}</div><dl className="details-grid"><div><dt>Customer</dt><dd>{details.customer.name}</dd></div><div><dt>Phone</dt><dd><a href={`tel:${details.customer.phone_number}`}>{details.customer.phone_number}</a></dd></div><div><dt>Payment Method</dt><dd>{methodLabel(details.payment_method)}</dd></div><div><dt>Order Date</dt><dd>{formatDate(details.created_at)}</dd></div>{details.mpesa_payment?.mpesa_receipt_number && <div><dt>M-Pesa Receipt</dt><dd>{details.mpesa_payment.mpesa_receipt_number}</dd></div>}<div className="detail-notes"><dt>Notes</dt><dd>{details.notes || "No notes"}</dd></div></dl><div className="detail-item-list"><h3>Items</h3>{details.items.map((item) => <div key={item.order_item_id}><span><strong>{item.product_name}</strong><small>{item.quantity} × {money.format(item.unit_price)} per {item.unit_name}</small></span><b>{money.format(item.line_total)}</b></div>)}<footer><span>Order Total</span><strong>{money.format(details.total_amount)}</strong></footer></div><div className="admin-order-actions detail-actions">{orderActions(details)}{details.order_status === "pending" && <button type="button" disabled={acting} onClick={() => setOrderStatus(details, "completed")}>Mark Completed</button>}</div></>}</div></div>}
 
-    try {
-      const result = await deleteOrder(orderToDelete.order_id);
-      setOrders((currentOrders) =>
-        currentOrders.filter((order) => order.order_id !== orderToDelete.order_id),
-      );
-      setSelectedOrder(null);
-      setOrderToDelete(null);
-      setDeleteMessage(`${result.message}.`);
-    } catch (error) {
-      setDeleteError(error.message || "The cancelled order could not be deleted.");
-    } finally {
-      setDeleting(false);
-    }
-  }
-
-  async function handleRecordPayment(event) {
-    event.preventDefault();
-    if (!paymentMethod) {
-      setPaymentError("Choose a payment method.");
-      return;
-    }
-    setPaymentRecording(true);
-    setPaymentError("");
-    try {
-      const result = await recordOrderPayment(paymentOrder.order_id, paymentMethod);
-      setOrders((current) => current.map((order) => order.order_id === result.order_id ? { ...order, ...result } : order));
-      if (selectedOrder?.order_id === result.order_id) setSelectedOrder(await getOrder(result.order_id));
-      setStatusMessage(result.message);
-      setPaymentOrder(null);
-      setPaymentMethod("");
-    } catch (error) {
-      setPaymentError(error.message);
-    } finally {
-      setPaymentRecording(false);
-    }
-  }
-
-  return (
-    <>
-      <section className="page-heading">
-        <div>
-          <p className="eyebrow">Sales activity</p>
-          <h1>Orders</h1>
-          <p className="page-description">
-            Review incoming orders, their current status, and recorded totals.
-          </p>
-        </div>
-        <div className="record-count" aria-label={`${filteredOrders.length} displayed orders`}>
-          <strong>{filteredOrders.length}</strong>
-          <span>{filteredOrders.length === 1 ? "order" : "orders"}</span>
-        </div>
-      </section>
-
-      <div className="orders-layout">
-        {deleteMessage && (
-          <p className="message success-message list-message" role="status">
-            {deleteMessage}
-          </p>
-        )}
-        <section className="panel list-panel" aria-labelledby="orders-list-heading">
-          <div className="panel-heading">
-            <p className="section-number">01</p>
-            <div>
-              <h2 id="orders-list-heading">Order records</h2>
-              <p>Select an order to view its full information.</p>
-            </div>
-          </div>
-
-          <div className="status-filters" aria-label="Filter orders by status">
-            {[
-              ["active", "Active"],
-              ["all", "All"],
-              ["pending", "Pending"],
-              ["completed", "Completed"],
-              ["cancelled", "Cancelled"],
-            ].map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                className={`filter-button${statusFilter === value ? " active" : ""}`}
-                onClick={() => setStatusFilter(value)}
-                aria-pressed={statusFilter === value}
-              >
-                {label}
-              </button>
-            ))}
-            <select className="payment-filter" value={paymentFilter} onChange={(event) => setPaymentFilter(event.target.value)} aria-label="Filter orders by payment status"><option value="all">All payments</option><option value="unpaid">Unpaid orders</option><option value="paid">Paid orders</option></select>
-          </div>
-
-          {loading && <p className="state-message">Loading orders…</p>}
-
-          {!loading && loadError && (
-            <div className="state-message error-state">
-              <strong>Orders could not be loaded.</strong>
-              <span>{loadError}</span>
-            </div>
-          )}
-
-          {!loading && !loadError && filteredOrders.length === 0 && (
-            <div className="state-message empty-state">
-              <strong>{orders.length === 0 ? "No orders yet." : "No orders match this filter."}</strong>
-              <span>
-                {orders.length === 0
-                  ? "New orders will appear here when they are created."
-                  : "Choose another status to see different orders."}
-              </span>
-            </div>
-          )}
-
-          {!loading && !loadError && filteredOrders.length > 0 && (
-            <div className="table-wrapper">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Order</th>
-                    <th>Customer</th>
-                    <th>Order Items</th>
-                    <th>Status</th>
-                    <th>Payment</th>
-                    <th>Method</th>
-                    <th>Total</th>
-                    <th>Created</th>
-                    <th><span className="visually-hidden">Action</span></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredOrders.map((order) => (
-                    <tr key={order.order_id}>
-                      <td data-label="Order">
-                        <strong>{order.order_number}</strong>
-                        <span className="record-id">ID #{order.order_id}</span>
-                      </td>
-                      <td data-label="Customer">{order.customer_name}</td>
-                      <td data-label="Order Items">{order.item_summary}</td>
-                      <td data-label="Status">
-                        <span className={`status-badge status-${order.order_status}`}>
-                          {formatStatus(order.order_status)}
-                        </span>
-                      </td>
-                      <td data-label="Payment"><span className={`payment-badge payment-${order.payment_status}`}>{order.payment_status === "paid" ? "Paid" : "Unpaid"}</span></td>
-                      <td data-label="Method">{paymentMethodLabel(order.payment_method)}</td>
-                      <td data-label="Total" className="price-cell">
-                        {formatAmount(order.total_amount)}
-                      </td>
-                      <td data-label="Created">{formatDate(order.created_at)}</td>
-                      <td data-label="Action">
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          onClick={() => handleViewOrder(order.order_id)}
-                        >
-                          View
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-
-        {(detailsLoading || detailsError || selectedOrder) && (
-          <section className="panel details-panel" aria-live="polite">
-            <div className="panel-heading">
-              <p className="section-number">02</p>
-              <div>
-                <h2>Order details</h2>
-                <p>Information for the selected order.</p>
-              </div>
-            </div>
-
-            {detailsLoading && <p className="state-message">Loading order details…</p>}
-
-            {!detailsLoading && detailsError && (
-              <p className="message error-message details-message">{detailsError}</p>
-            )}
-
-            {!detailsLoading && selectedOrder && (
-              <>
-                <dl className="details-grid">
-                  <div>
-                    <dt>Order number</dt>
-                    <dd>{selectedOrder.order_number}</dd>
-                  </div>
-                  <div>
-                    <dt>Customer name</dt>
-                    <dd>{selectedOrder.customer.name}</dd>
-                  </div>
-                  <div>
-                    <dt>Phone number</dt>
-                    <dd><a className="phone-link" href={`tel:${selectedOrder.customer.phone_number}`}>{selectedOrder.customer.phone_number}</a></dd>
-                  </div>
-                  <div>
-                    <dt>Status</dt>
-                    <dd>
-                      <span className={`status-badge status-${selectedOrder.order_status}`}>
-                        {formatStatus(selectedOrder.order_status)}
-                      </span>
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Total amount</dt>
-                    <dd className="detail-total">
-                      {formatAmount(selectedOrder.total_amount)}
-                    </dd>
-                  </div>
-                  <div><dt>Payment status</dt><dd><span className={`payment-badge payment-${selectedOrder.payment_status}`}>{selectedOrder.payment_status === "paid" ? "Paid" : "Unpaid"}</span></dd></div>
-                  <div><dt>Payment method</dt><dd>{paymentMethodLabel(selectedOrder.payment_method)}</dd></div>
-                  <div><dt>Paid at</dt><dd>{formatDate(selectedOrder.paid_at)}</dd></div>
-                  {selectedOrder.mpesa_payment?.mpesa_receipt_number && <div><dt>M-Pesa receipt</dt><dd>{selectedOrder.mpesa_payment.mpesa_receipt_number}</dd></div>}
-                  <div>
-                    <dt>Created</dt>
-                    <dd>{formatDate(selectedOrder.created_at)}</dd>
-                  </div>
-                  <div>
-                    <dt>Last updated</dt>
-                    <dd>{formatDate(selectedOrder.updated_at)}</dd>
-                  </div>
-                  <div className="detail-notes">
-                    <dt>Notes</dt>
-                    <dd>{selectedOrder.notes || "No notes for this order."}</dd>
-                  </div>
-                </dl>
-
-                <section className="order-items-section" aria-labelledby="order-items-heading">
-                  <h2 id="order-items-heading">Order Items</h2>
-                  {selectedOrder.items.length === 0 ? (
-                    <p className="state-message">No items are recorded for this order.</p>
-                  ) : (
-                    <div className="table-wrapper">
-                      <table>
-                        <thead><tr><th>Product</th><th>Quantity</th><th>Unit</th><th>Unit Price</th><th>Line Total</th></tr></thead>
-                        <tbody>{selectedOrder.items.map((item) => (
-                          <tr key={item.order_item_id}>
-                            <td data-label="Product"><strong>{item.product_name}</strong></td>
-                            <td data-label="Quantity">{quantityWithUnit(item.quantity, item.unit_name)}</td>
-                            <td data-label="Unit">{item.unit_name}</td>
-                            <td data-label="Unit Price" className="price-cell">{formatAmount(item.unit_price)}</td>
-                            <td data-label="Line Total" className="price-cell">{formatAmount(item.line_total)}</td>
-                          </tr>
-                        ))}</tbody>
-                      </table>
-                    </div>
-                  )}
-                  <p className="order-items-total">Order Total: <strong>{formatAmount(selectedOrder.total_amount)}</strong></p>
-                </section>
-
-                <div className="details-actions">
-                  {selectedOrder.payment_status === "unpaid" && selectedOrder.order_status !== "cancelled" && <button type="button" className="secondary-button" onClick={() => { setPaymentOrder(selectedOrder); setPaymentMethod(""); setPaymentError(""); }}>Mark as Paid</button>}
-                  {selectedOrder.order_status === "pending" && (
-                    <button
-                      type="button"
-                      onClick={handleMarkCompleted}
-                      disabled={statusUpdating}
-                    >
-                      {statusUpdating ? "Updating status…" : "Mark as Completed"}
-                    </button>
-                  )}
-                  {selectedOrder.order_status === "cancelled" && (
-                    <button
-                      type="button"
-                      className="danger-button"
-                      onClick={() => {
-                        setDeleteError("");
-                        setOrderToDelete(selectedOrder);
-                      }}
-                    >
-                      Delete
-                    </button>
-                  )}
-                  {statusError && (
-                    <p className="message error-message">{statusError}</p>
-                  )}
-                  {statusMessage && (
-                    <p className="message success-message">{statusMessage}</p>
-                  )}
-                </div>
-              </>
-            )}
-          </section>
-        )}
-      </div>
-
-      {orderToDelete && (
-        <div className="modal-backdrop" role="presentation">
-          <div
-            className="confirmation-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="delete-order-heading"
-          >
-            <p className="eyebrow">Permanent action</p>
-            <h2 id="delete-order-heading">
-              Delete cancelled order {orderToDelete.order_number}?
-            </h2>
-            <p>This will permanently remove the order and cannot be undone.</p>
-            {deleteError && <p className="message error-message">{deleteError}</p>}
-            <div className="dialog-actions">
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => setOrderToDelete(null)}
-                disabled={deleting}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="danger-button"
-                onClick={handleDeleteOrder}
-                disabled={deleting}
-              >
-                {deleting ? "Deleting…" : "Delete Order"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {paymentOrder && <div className="modal-backdrop" role="presentation"><form className="confirmation-dialog" role="dialog" aria-modal="true" aria-labelledby="record-payment-heading" onSubmit={handleRecordPayment}><p className="eyebrow">Record Payment</p><h2 id="record-payment-heading">Order {paymentOrder.order_number}</h2><p>Amount: <strong>{formatAmount(paymentOrder.total_amount)}</strong></p><label>Payment Method<select value={paymentMethod} onChange={(event) => { setPaymentMethod(event.target.value); setPaymentError(""); }} required><option value="">Select payment method</option><option value="cash">Cash</option><option value="bank_transfer">Bank Transfer</option></select></label>{paymentError && <p className="message error-message">{paymentError}</p>}<div className="dialog-actions"><button type="button" className="secondary-button" onClick={() => setPaymentOrder(null)} disabled={paymentRecording}>Cancel</button><button type="submit" disabled={paymentRecording}>{paymentRecording ? "Recording…" : "Confirm Payment"}</button></div></form></div>}
-    </>
-  );
+    {paymentOrder && <div className="modal-backdrop" role="presentation"><form className="confirmation-dialog" onSubmit={recordPayment}><p className="eyebrow">Confirm payment</p><h2>{paymentOrder.payment_method === "cash" ? "Confirm Cash Payment" : "Record Payment"}</h2><p>Confirm receipt of {money.format(paymentOrder.total_amount)} for {paymentOrder.order_number}. This will complete a cash order.</p><label>Payment Method<select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}><option value="cash">Cash</option><option value="bank_transfer">Bank Transfer</option></select></label>{actionError && <p className="message error-message">{actionError}</p>}<div className="dialog-actions"><button type="button" className="secondary-button" onClick={() => setPaymentOrder(null)}>Cancel</button><button type="submit" disabled={acting}>{acting ? "Confirming…" : "Confirm Payment"}</button></div></form></div>}
+    {deleteOrderTarget && <div className="modal-backdrop" role="presentation"><div className="confirmation-dialog"><p className="eyebrow">Permanent action</p><h2>Delete cancelled order?</h2><p>This permanently removes {deleteOrderTarget.order_number}.</p>{actionError && <p className="message error-message">{actionError}</p>}<div className="dialog-actions"><button type="button" className="secondary-button" onClick={() => setDeleteOrderTarget(null)}>Cancel</button><button type="button" className="danger-button" disabled={acting} onClick={permanentlyDelete}>{acting ? "Deleting…" : "Delete Order"}</button></div></div></div>}
+  </>;
 }
-
-export default OrdersPage;

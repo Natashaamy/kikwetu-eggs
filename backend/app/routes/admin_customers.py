@@ -2,7 +2,7 @@
 
 import sqlite3
 
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 
 from ..auth import admin_required
 from ..db import get_db
@@ -32,6 +32,7 @@ def list_customers():
                 customers.name,
                 customers.phone_number,
                 customers.created_at,
+                customers.is_active,
                 COUNT(orders.order_id) AS total_orders,
                 COALESCE(SUM(
                     CASE WHEN orders.order_status = 'completed' THEN 1 ELSE 0 END
@@ -67,7 +68,7 @@ def customer_details(customer_id):
     try:
         customer = database.execute(
             """
-            SELECT customer_id, name, phone_number, created_at, updated_at
+            SELECT customer_id, name, phone_number, is_active, created_at, updated_at
             FROM customers
             WHERE customer_id = ?
             """,
@@ -85,6 +86,8 @@ def customer_details(customer_id):
                     AS pending_orders,
                 COALESCE(SUM(CASE WHEN order_status = 'completed' THEN 1 ELSE 0 END), 0)
                     AS completed_orders,
+                COALESCE(SUM(CASE WHEN order_status = 'processing' THEN 1 ELSE 0 END), 0)
+                    AS processing_orders,
                 COALESCE(SUM(CASE WHEN order_status = 'cancelled' THEN 1 ELSE 0 END), 0)
                     AS cancelled_orders,
                 COALESCE(SUM(
@@ -99,7 +102,8 @@ def customer_details(customer_id):
 
         orders = database.execute(
             """
-            SELECT order_number, order_status, total_amount, created_at
+            SELECT order_number, order_status, payment_status, payment_method,
+                   total_amount, created_at
             FROM orders
             WHERE customer_id = ?
             ORDER BY created_at DESC, order_id DESC
@@ -116,9 +120,47 @@ def customer_details(customer_id):
         return jsonify({"error": "Customer details could not be loaded"}), 500
 
 
+@admin_customers_bp.patch("/<int:customer_id>/status")
+def update_customer_status(customer_id):
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not isinstance(data.get("is_active"), bool):
+        return jsonify({"error": "is_active must be true or false"}), 400
+    database = get_db()
+    try:
+        database.begin()
+        customer = database.execute(
+            "SELECT customer_id FROM customers WHERE customer_id = ?", (customer_id,)
+        ).fetchone()
+        if customer is None:
+            database.rollback()
+            return jsonify({"error": "Customer not found"}), 404
+        database.execute(
+            """UPDATE customers SET is_active = ?, updated_at = CURRENT_TIMESTAMP
+               WHERE customer_id = ?""",
+            (data["is_active"], customer_id),
+        )
+        updated = database.execute(
+            """SELECT customer_id, name, phone_number, is_active, created_at
+               FROM customers WHERE customer_id = ?""",
+            (customer_id,),
+        ).fetchone()
+        database.commit()
+        return jsonify({
+            "message": "Customer account reactivated successfully." if data["is_active"]
+                       else "Customer account deactivated successfully.",
+            "customer": dict(updated),
+        }), 200
+    except sqlite3.IntegrityError:
+        database.rollback()
+        return jsonify({"error": "Customer status could not be updated"}), 400
+    except sqlite3.Error:
+        database.rollback()
+        return jsonify({"error": "Customer status could not be updated"}), 500
+
+
 @admin_customers_bp.delete("/<int:customer_id>")
 def delete_customer(customer_id):
-    """Permanently delete a customer and all of their order history."""
+    """Delete only a customer account that has no business history."""
     database = get_db()
 
     try:
@@ -131,53 +173,25 @@ def delete_customer(customer_id):
             database.rollback()
             return jsonify({"error": "Customer not found"}), 404
 
-        deletion_counts = database.execute(
-            """
-            SELECT
-                COUNT(DISTINCT orders.order_id) AS orders,
-                COUNT(order_items.order_item_id) AS order_items
-            FROM orders
-            LEFT JOIN order_items ON order_items.order_id = orders.order_id
-            WHERE orders.customer_id = ?
-            """,
-            (customer_id,),
+        has_orders = database.execute(
+            "SELECT 1 FROM orders WHERE customer_id = ? LIMIT 1", (customer_id,)
         ).fetchone()
+        has_mpesa_history = database.execute(
+            "SELECT 1 FROM mpesa_transactions WHERE customer_id = ? LIMIT 1", (customer_id,)
+        ).fetchone()
+        if has_orders or has_mpesa_history:
+            database.rollback()
+            return jsonify({
+                "error": "This customer has order or payment history and cannot be permanently deleted. Deactivate the account instead."
+            }), 409
 
-        # Pending orders still hold reserved stock, so restore it before deletion.
-        database.execute(
-            """UPDATE products
-               SET stock_quantity = stock_quantity + COALESCE((
-                   SELECT SUM(order_items.quantity)
-                   FROM order_items
-                   JOIN orders ON orders.order_id = order_items.order_id
-                   WHERE orders.customer_id = ?
-                     AND orders.order_status = 'pending'
-                     AND order_items.product_id = products.product_id
-               ), 0), updated_at = CURRENT_TIMESTAMP
-               WHERE product_id IN (
-                   SELECT order_items.product_id
-                   FROM order_items
-                   JOIN orders ON orders.order_id = order_items.order_id
-                   WHERE orders.customer_id = ?
-                     AND orders.order_status = 'pending'
-               )""",
-            (customer_id, customer_id),
-        )
-
-        # Deleting orders cascades to their order_items and payments.
-        database.execute(
-            "DELETE FROM orders WHERE customer_id = ?",
-            (customer_id,),
-        )
         database.execute(
             "DELETE FROM customers WHERE customer_id = ?",
             (customer_id,),
         )
         database.commit()
         return jsonify({
-            "message": "Customer and order history deleted successfully.",
-            "deleted_orders": deletion_counts["orders"],
-            "deleted_order_items": deletion_counts["order_items"],
+            "message": "Customer account permanently deleted successfully.",
         }), 200
     except sqlite3.IntegrityError:
         database.rollback()

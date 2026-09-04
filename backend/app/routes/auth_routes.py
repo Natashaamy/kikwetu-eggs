@@ -84,7 +84,7 @@ def login():
     try:
         clean_username = normalize_login_name(login_name)
         admin = database.execute("SELECT admin_id, name, username, password_hash, is_active FROM admins WHERE username = ?", (clean_username,)).fetchone()
-        customer = database.execute("SELECT customer_id, name, username, phone_number, password_hash FROM customers WHERE username = ?", (clean_username,)).fetchone()
+        customer = database.execute("SELECT customer_id, name, username, phone_number, password_hash, is_active FROM customers WHERE username = ?", (clean_username,)).fetchone()
         if admin is not None and customer is not None:
             return jsonify({"error": "Invalid name or password"}), 401
         if admin is not None:
@@ -94,6 +94,8 @@ def login():
             session["user_id"] = admin["admin_id"]
             session["role"] = "admin"
             return jsonify({"authenticated": True, "message": "Login successful", "role": "admin", "user": {"admin_id": admin["admin_id"], "name": admin["name"], "username": admin["username"]}}), 200
+        if customer is not None and not customer["is_active"]:
+            return jsonify({"error": "This account has been deactivated. Please contact Kikwetu Eggs."}), 403
         if customer is None or customer["password_hash"] is None or not check_password_hash(customer["password_hash"], password):
             return jsonify({"error": "Invalid name or password"}), 401
         session.clear()
@@ -119,7 +121,7 @@ def get_current_user():
     database = get_db()
     try:
         if role == "customer":
-            user = database.execute("SELECT customer_id, name, username, phone_number FROM customers WHERE customer_id = ?", (user_id,)).fetchone()
+            user = database.execute("SELECT customer_id, name, username, phone_number FROM customers WHERE customer_id = ? AND is_active", (user_id,)).fetchone()
         else:
             user = database.execute("SELECT admin_id, name, username FROM admins WHERE admin_id = ? AND is_active", (user_id,)).fetchone()
         if user is None:

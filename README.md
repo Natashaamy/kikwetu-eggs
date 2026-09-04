@@ -64,6 +64,12 @@ Running `init_db.py` on every service start is safe: it uses
 `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS`. It never drops
 tables and never seeds fake business data.
 
+The initializer also performs a small idempotent customer-account migration.
+On PostgreSQL it runs `ALTER TABLE customers ADD COLUMN IF NOT EXISTS` for the
+`is_active` flag. On SQLite it first checks `PRAGMA table_info(customers)` and
+adds the column only when missing. Existing customers receive the active
+default, and no customer or business-history rows are recreated or deleted.
+
 Required Render variables:
 
 - `DATABASE_URL` — supplied by the linked Render PostgreSQL database.

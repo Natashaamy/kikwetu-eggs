@@ -18,6 +18,14 @@ export async function getAdminCustomer(customerId) {
   return readResponse(await apiFetch(`${ADMIN_CUSTOMERS_URL}/${customerId}`));
 }
 
+export async function updateAdminCustomerStatus(customerId, isActive) {
+  return readResponse(await apiFetch(`${ADMIN_CUSTOMERS_URL}/${customerId}/status`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ is_active: isActive }),
+  }));
+}
+
 export async function deleteAdminCustomer(customerId) {
   return readResponse(await apiFetch(`${ADMIN_CUSTOMERS_URL}/${customerId}`, {
     method: "DELETE",

@@ -14,6 +14,20 @@ POSTGRES_SCHEMA = BACKEND_DIR / "schema.sql"
 SQLITE_SCHEMA = BACKEND_DIR / "schema_sqlite.sql"
 
 
+def migrate_customer_account_status(database):
+    """Add the active-account flag without rebuilding or deleting any table."""
+    if is_postgres():
+        database.execute(
+            "ALTER TABLE customers ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE"
+        )
+        return
+    columns = database.execute("PRAGMA table_info(customers)").fetchall()
+    if "is_active" not in {column["name"] for column in columns}:
+        database.execute(
+            "ALTER TABLE customers ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1))"
+        )
+
+
 def create_initial_admin(database):
     names = (
         "INITIAL_ADMIN_NAME",
@@ -91,6 +105,7 @@ def initialize_database(app):
         schema_file = POSTGRES_SCHEMA if is_postgres() else SQLITE_SCHEMA
         try:
             database.executescript(schema_file.read_text(encoding="utf-8"))
+            migrate_customer_account_status(database)
             create_initial_admin(database)
             reset_admin_password(database)
             database.commit()

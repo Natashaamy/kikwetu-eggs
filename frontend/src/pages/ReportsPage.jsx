@@ -96,15 +96,17 @@ export default function ReportsPage() {
   const summary = report?.summary;
   const statusRows = summary ? [
     ["pending", summary.pending_orders],
+    ["processing", summary.processing_orders],
     ["completed", summary.completed_orders],
     ["cancelled", summary.cancelled_orders],
   ] : [];
   const hasData = Boolean(summary?.total_orders);
+  const maxDailyRevenue = Math.max(1, ...(report?.sales_over_time || []).map((row) => Number(row.revenue)));
 
   return <>
     <section className="page-heading">
-      <div><p className="eyebrow">Business intelligence</p><h1>Reports</h1><p className="page-description">Review sales, orders, products, and customers using current database records.</p></div>
-      {report && <button type="button" className="primary-link" onClick={exportReport} disabled={exporting}>{exporting ? "Exporting…" : "Export CSV"}</button>}
+      <div><p className="eyebrow">Business intelligence</p><h1>Reports &amp; Analytics</h1><p className="page-description">Track sales, orders, payments and business performance.</p></div>
+      {report && <button type="button" className="export-report-button" onClick={exportReport} disabled={exporting}>{exporting ? "Exporting…" : "Export CSV"}</button>}
     </section>
 
     <section className="report-controls" aria-label="Report date range">
@@ -125,15 +127,9 @@ export default function ReportsPage() {
       <section className="stats-grid report-stats" aria-label="Sales summary">
         {[
           ["Total Orders", summary.total_orders, "total"],
-          ["Completed", summary.completed_orders, "completed"],
-          ["Pending", summary.pending_orders, "pending"],
-          ["Cancelled", summary.cancelled_orders, "cancelled"],
-          ["Completed Revenue", formatAmount(summary.completed_revenue), "revenue"],
-          ["Average Completed Order", formatAmount(summary.average_completed_order), "revenue"],
+          ["Total Revenue", formatAmount(summary.completed_revenue), "revenue"],
           ["Paid Orders", summary.paid_orders, "completed"],
           ["Unpaid Orders", summary.unpaid_orders, "pending"],
-          ["Payments Received", formatAmount(summary.payments_received), "revenue"],
-          ["Outstanding Amount", formatAmount(summary.outstanding_amount), "cancelled"],
         ].map(([label, value, type]) => <article className={`stat-card stat-${type}`} key={label}><span>{label}</span><strong>{value}</strong></article>)}
       </section>
 
@@ -145,7 +141,11 @@ export default function ReportsPage() {
           })}
         </div></section>
 
-        <section className="panel report-status-panel"><div className="panel-heading"><p className="section-number">02</p><div><h2>Payments by Method</h2><p>Amounts recorded as paid in the selected period.</p></div></div>{report.payment_methods.length === 0 ? <p className="state-message">No payments recorded in this period.</p> : <div className="payment-method-summary">{report.payment_methods.map((method) => <div key={method.payment_method}><strong>{{ cash: "Cash", mpesa: "M-Pesa", bank_transfer: "Bank Transfer" }[method.payment_method]}</strong><span>{method.paid_orders} paid {method.paid_orders === 1 ? "order" : "orders"}</span><b>{formatAmount(method.amount)}</b></div>)}</div>}</section>
+        <section className="panel analytics-chart-panel"><div className="panel-heading"><p className="section-number">02</p><div><h2>Sales Overview</h2><p>Completed-order revenue over the selected period.</p></div></div>{report.sales_over_time.length === 0 ? <p className="state-message">No completed sales in this period.</p> : <div className="sales-bars">{report.sales_over_time.map((day) => <div className="sales-bar-row" key={day.sale_date}><time>{day.sale_date}</time><div><span style={{ width: `${Math.max(3, Number(day.revenue) / maxDailyRevenue * 100)}%` }} /></div><strong>{formatAmount(day.revenue)}</strong></div>)}</div>}</section>
+
+        <section className="panel report-status-panel"><div className="panel-heading"><p className="section-number">03</p><div><h2>Payments by Method</h2><p>Amounts recorded as paid in the selected period.</p></div></div>{report.payment_methods.length === 0 ? <p className="state-message">No payments recorded in this period.</p> : <div className="payment-method-summary">{report.payment_methods.map((method) => <div key={method.payment_method}><strong>{{ cash: "Cash", mpesa: "M-Pesa", bank_transfer: "Bank Transfer" }[method.payment_method]}</strong><span>{method.paid_orders} paid {method.paid_orders === 1 ? "order" : "orders"}</span><b>{formatAmount(method.amount)}</b></div>)}</div>}</section>
+
+        <section className="panel"><div className="panel-heading"><p className="section-number">04</p><div><h2>Detailed Orders</h2><p>Recent activity for the selected period.</p></div></div><div className="table-wrapper"><table><thead><tr><th>Order</th><th>Customer</th><th>Date</th><th>Total</th><th>Status</th><th>Payment</th><th>Method</th></tr></thead><tbody>{report.recent_orders.map((order) => <tr key={order.order_number}><td data-label="Order"><strong>{order.order_number}</strong></td><td data-label="Customer">{order.customer_name}</td><td data-label="Date">{formatDate(order.created_at)}</td><td data-label="Total" className="price-cell">{formatAmount(order.total_amount)}</td><td data-label="Status"><span className={`status-badge status-${order.order_status}`}>{titleCase(order.order_status)}</span></td><td data-label="Payment"><span className={`payment-badge payment-${order.payment_status}`}>{titleCase(order.payment_status)}</span></td><td data-label="Method">{{ cash: "Cash", mpesa: "M-Pesa", bank_transfer: "Bank Transfer" }[order.payment_method] || "—"}</td></tr>)}</tbody></table></div></section>
 
         <section className="panel"><div className="panel-heading"><p className="section-number">02</p><div><h2>Top Selling Products</h2><p>Completed sales ranked by units sold.</p></div></div>
           {report.top_products.length === 0 ? <p className="state-message">No completed product sales in this period.</p> : <div className="table-wrapper"><table><thead><tr><th>Rank</th><th>Product</th><th>Units Sold</th><th>Current Stock</th><th>Completed Orders</th><th>Revenue</th></tr></thead><tbody>{report.top_products.map((product, index) => <tr key={product.product_id}><td data-label="Rank"><strong>#{index + 1}</strong></td><td data-label="Product"><strong>{product.name}</strong><span className="product-description">Per {product.unit_name}</span></td><td data-label="Units Sold">{product.units_sold} {product.unit_name}{product.units_sold === 1 ? "" : "s"}</td><td data-label="Stock">{product.stock_quantity}</td><td data-label="Orders">{product.completed_orders}</td><td data-label="Revenue" className="price-cell">{formatAmount(product.revenue)}</td></tr>)}</tbody></table></div>}

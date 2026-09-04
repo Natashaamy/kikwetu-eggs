@@ -1,168 +1,60 @@
 import { useEffect, useMemo, useState } from "react";
+import { deleteAdminCustomer, getAdminCustomer, getAdminCustomers, updateAdminCustomerStatus } from "../api/adminCustomers.js";
 
-import {
-  deleteAdminCustomer,
-  getAdminCustomer,
-  getAdminCustomers,
-} from "../api/adminCustomers.js";
-
-const currencyFormatter = new Intl.NumberFormat("en-KE", {
-  style: "currency",
-  currency: "KES",
-  minimumFractionDigits: 0,
-});
-
-const dateFormatter = new Intl.DateTimeFormat("en-KE", {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
-
-function formatAmount(amount) {
-  return currencyFormatter.format(Number(amount || 0));
-}
-
-function formatDate(date) {
-  if (!date) return "No orders yet";
-  const parsedDate = new Date(`${date.replace(" ", "T")}Z`);
-  return Number.isNaN(parsedDate.getTime()) ? date : dateFormatter.format(parsedDate);
-}
-
-function formatStatus(status) {
-  return status.charAt(0).toUpperCase() + status.slice(1);
-}
+const money = new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES", minimumFractionDigits: 0 });
+const dateFormat = new Intl.DateTimeFormat("en-KE", { dateStyle: "medium" });
+const formatDate = (value) => { if (!value) return "—"; const date = new Date(`${value.replace(" ", "T")}Z`); return Number.isNaN(date.getTime()) ? value : dateFormat.format(date); };
+const title = (value) => value ? value.charAt(0).toUpperCase() + value.slice(1) : "—";
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState([]);
   const [search, setSearch] = useState("");
-  const [orderFilter, setOrderFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [selected, setSelected] = useState(null);
-  const [detailsLoading, setDetailsLoading] = useState(false);
-  const [detailsError, setDetailsError] = useState("");
-  const [customerToDelete, setCustomerToDelete] = useState(null);
-  const [deleting, setDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState("");
   const [message, setMessage] = useState("");
+  const [details, setDetails] = useState(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [confirmation, setConfirmation] = useState(null);
+  const [acting, setActing] = useState(false);
+  const [actionError, setActionError] = useState("");
 
-  useEffect(() => {
-    let ignoreResult = false;
-    getAdminCustomers()
-      .then((data) => {
-        if (!ignoreResult) setCustomers(data.customers || []);
-      })
-      .catch(() => {
-        if (!ignoreResult) setError("Customer accounts could not be loaded. Please try again.");
-      })
-      .finally(() => {
-        if (!ignoreResult) setLoading(false);
-      });
-    return () => { ignoreResult = true; };
-  }, []);
+  useEffect(() => { getAdminCustomers().then((data) => setCustomers(data.customers || [])).catch(() => setError("Customer accounts could not be loaded.")).finally(() => setLoading(false)); }, []);
+  const summary = useMemo(() => ({ total: customers.length, active: customers.filter((c) => c.is_active).length, inactive: customers.filter((c) => !c.is_active).length }), [customers]);
+  const visible = useMemo(() => { const term = search.trim().toLowerCase(); return customers.filter((customer) => (!term || customer.name.toLowerCase().includes(term) || customer.phone_number.toLowerCase().includes(term)) && (statusFilter === "all" || (statusFilter === "active") === Boolean(customer.is_active))); }, [customers, search, statusFilter]);
 
-  const visibleCustomers = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    return customers.filter((customer) => {
-      const matchesSearch = !term
-        || customer.name.toLowerCase().includes(term)
-        || customer.phone_number.toLowerCase().includes(term);
-      const matchesOrders = orderFilter === "all"
-        || (orderFilter === "with" && customer.total_orders > 0)
-        || (orderFilter === "without" && customer.total_orders === 0);
-      return matchesSearch && matchesOrders;
-    });
-  }, [customers, orderFilter, search]);
-
-  async function handleView(customerId) {
-    setDetailsLoading(true);
-    setDetailsError("");
-    setSelected(null);
+  async function viewCustomer(customerId) { setDetailsLoading(true); setActionError(""); try { setDetails(await getAdminCustomer(customerId)); } catch { setActionError("Customer details could not be loaded."); } finally { setDetailsLoading(false); } }
+  function updateLocal(customer) { setCustomers((current) => current.map((item) => item.customer_id === customer.customer_id ? { ...item, ...customer } : item)); setDetails((current) => current?.customer.customer_id === customer.customer_id ? { ...current, customer: { ...current.customer, ...customer } } : current); }
+  async function confirmAction() {
+    if (!confirmation) return; setActing(true); setActionError("");
     try {
-      setSelected(await getAdminCustomer(customerId));
-    } catch {
-      setDetailsError("Customer details could not be loaded. Please try again.");
-    } finally {
-      setDetailsLoading(false);
-    }
+      if (confirmation.type === "delete") {
+        const result = await deleteAdminCustomer(confirmation.customer.customer_id);
+        setCustomers((current) => current.filter((item) => item.customer_id !== confirmation.customer.customer_id));
+        if (details?.customer.customer_id === confirmation.customer.customer_id) setDetails(null);
+        setMessage(result.message);
+      } else {
+        const result = await updateAdminCustomerStatus(confirmation.customer.customer_id, confirmation.type === "reactivate");
+        updateLocal(result.customer); setMessage(result.message);
+      }
+      setConfirmation(null);
+    } catch (requestError) { setActionError(requestError.message); }
+    finally { setActing(false); }
   }
 
-  async function handleDelete() {
-    if (!customerToDelete) return;
-    setDeleting(true);
-    setDeleteError("");
-    try {
-      const result = await deleteAdminCustomer(customerToDelete.customer_id);
-      setCustomers((current) => current.filter(
-        (customer) => customer.customer_id !== customerToDelete.customer_id,
-      ));
-      if (selected?.customer.customer_id === customerToDelete.customer_id) setSelected(null);
-      setCustomerToDelete(null);
-      setMessage(result.message);
-    } catch (requestError) {
-      setDeleteError(requestError.message);
-    } finally {
-      setDeleting(false);
-    }
-  }
+  function actionButtons(customer) { return <div className="admin-customer-actions"><button type="button" className="secondary-button" onClick={() => viewCustomer(customer.customer_id)}>View Details</button><button type="button" className={customer.is_active ? "deactivate-button" : "reactivate-button"} onClick={() => { setActionError(""); setConfirmation({ type: customer.is_active ? "deactivate" : "reactivate", customer }); }}>{customer.is_active ? "Deactivate" : "Reactivate"}</button><button type="button" className="delete-text-button" onClick={() => { setActionError(""); setConfirmation({ type: "delete", customer }); }}>Delete Permanently</button></div>; }
 
   return <>
-    <section className="page-heading">
-      <div>
-        <p className="eyebrow">Account management</p>
-        <h1>Customers</h1>
-        <p className="page-description">Review registered accounts and their order activity.</p>
-      </div>
-      <div className="record-count"><strong>{visibleCustomers.length}</strong><span>customers</span></div>
+    <section className="page-heading"><div><p className="eyebrow">Account management</p><h1>Customers</h1><p className="page-description">Manage customer accounts and activity.</p></div></section>
+    <section className="admin-summary-grid"><article><span>Total Customers</span><strong>{summary.total}</strong></article><article className="summary-active"><span>Active Customers</span><strong>{summary.active}</strong></article><article className="summary-inactive"><span>Deactivated</span><strong>{summary.inactive}</strong></article></section>
+    {message && <p className="message success-message list-message" role="status">{message}</p>}{actionError && !confirmation && <p className="message error-message list-message">{actionError}</p>}
+    <section className="panel admin-list-panel"><div className="admin-toolbar"><label className="search-field">Search customers<input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Name or phone number" /></label><label>Account status<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">All</option><option value="active">Active</option><option value="inactive">Deactivated</option></select></label></div>
+      {loading && <p className="state-message">Loading customers…</p>}{error && <div className="state-message error-state"><strong>Customers unavailable.</strong><span>{error}</span></div>}{!loading && !error && visible.length === 0 && <div className="state-message empty-state"><strong>No customers found.</strong><span>Try changing the search or status filter.</span></div>}
+      {!loading && !error && visible.length > 0 && <div className="admin-customer-grid">{visible.map((customer) => <article className="admin-customer-card" key={customer.customer_id}><div className="customer-card-identity"><div className="mini-avatar">{customer.name.charAt(0).toUpperCase()}</div><div><h2>{customer.name}</h2><a href={`tel:${customer.phone_number}`}>{customer.phone_number}</a></div><span className={`status-badge ${customer.is_active ? "active" : "inactive"}`}>{customer.is_active ? "Active" : "Deactivated"}</span></div><dl><div><dt>Orders</dt><dd>{customer.total_orders}</dd></div><div><dt>Total spent</dt><dd>{money.format(customer.total_spent)}</dd></div><div><dt>Joined</dt><dd>{formatDate(customer.created_at)}</dd></div></dl>{actionButtons(customer)}</article>)}</div>}
     </section>
 
-    {message && <p className="message success-message list-message" role="status">{message}</p>}
+    {(details || detailsLoading) && <div className="modal-backdrop" role="presentation"><div className="confirmation-dialog customer-detail-modal" role="dialog" aria-modal="true" aria-labelledby="customer-detail-heading"><div className="dialog-title-row"><div><p className="eyebrow">Customer details</p><h2 id="customer-detail-heading">{details?.customer.name || "Loading…"}</h2></div><button type="button" className="dialog-close" aria-label="Close" onClick={() => setDetails(null)}>×</button></div>{detailsLoading ? <p className="state-message">Loading details…</p> : details && <><div className="customer-detail-profile"><div className="mini-avatar large">{details.customer.name.charAt(0).toUpperCase()}</div><div><strong>{details.customer.name}</strong><a href={`tel:${details.customer.phone_number}`}>{details.customer.phone_number}</a><span className={`status-badge ${details.customer.is_active ? "active" : "inactive"}`}>{details.customer.is_active ? "Active" : "Deactivated"}</span></div><small>Joined {formatDate(details.customer.created_at)}</small></div><section className="customer-activity-grid"><div><span>Total Orders</span><strong>{details.statistics.total_orders}</strong></div><div><span>Completed</span><strong>{details.statistics.completed_orders}</strong></div><div><span>Processing</span><strong>{details.statistics.processing_orders}</strong></div><div><span>Cancelled</span><strong>{details.statistics.cancelled_orders}</strong></div><div><span>Total Spent</span><strong>{money.format(details.statistics.total_spent)}</strong></div></section><div className="recent-customer-orders"><h3>Recent Orders</h3>{details.orders.length === 0 ? <p>No orders yet.</p> : details.orders.slice(0, 5).map((order) => <div key={order.order_number}><strong>{order.order_number}</strong><span>{formatDate(order.created_at)}</span><b>{money.format(order.total_amount)}</b><span className={`status-badge status-${order.order_status}`}>{title(order.order_status)}</span><span className={`payment-badge payment-${order.payment_status}`}>{title(order.payment_status)}</span></div>)}</div>{actionButtons(details.customer)}</>}</div></div>}
 
-    <section className="panel" aria-labelledby="customer-list-heading">
-      <div className="panel-heading"><p className="section-number">01</p><div><h2 id="customer-list-heading">Customer accounts</h2><p>Search by name or phone number.</p></div></div>
-      <div className="customer-toolbar">
-        <label>Search customers<input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Name or phone number" /></label>
-        <label>Order activity<select value={orderFilter} onChange={(event) => setOrderFilter(event.target.value)}><option value="all">All customers</option><option value="with">With orders</option><option value="without">Without orders</option></select></label>
-      </div>
-
-      {loading && <p className="state-message">Loading customers…</p>}
-      {!loading && error && <div className="state-message error-state"><strong>Customers unavailable.</strong><span>{error}</span></div>}
-      {!loading && !error && visibleCustomers.length === 0 && <div className="state-message empty-state"><strong>No customers found.</strong><span>Try changing the search or order filter.</span></div>}
-      {!loading && !error && visibleCustomers.length > 0 && <div className="table-wrapper"><table><thead><tr><th>Customer</th><th>Phone</th><th>Orders</th><th>Completed</th><th>Total Spent</th><th>Last Order</th><th>Account Created</th><th><span className="visually-hidden">Actions</span></th></tr></thead><tbody>
-        {visibleCustomers.map((customer) => <tr key={customer.customer_id}>
-          <td data-label="Customer"><strong>{customer.name}</strong></td>
-          <td data-label="Phone"><a className="phone-link" href={`tel:${customer.phone_number}`}>{customer.phone_number}</a></td>
-          <td data-label="Orders">{customer.total_orders}</td>
-          <td data-label="Completed">{customer.completed_orders}</td>
-          <td data-label="Total Spent" className="price-cell">{formatAmount(customer.total_spent)}</td>
-          <td data-label="Last Order">{formatDate(customer.last_order_date)}</td>
-          <td data-label="Created">{formatDate(customer.created_at)}</td>
-          <td data-label="Actions"><div className="row-actions"><button type="button" className="secondary-button" onClick={() => handleView(customer.customer_id)}>View</button><button type="button" className="danger-button" onClick={() => { setDeleteError(""); setCustomerToDelete(customer); }}>Delete</button></div></td>
-        </tr>)}
-      </tbody></table></div>}
-    </section>
-
-    {(detailsLoading || detailsError || selected) && <section className="panel customer-details-panel" aria-live="polite">
-      <div className="panel-heading"><p className="section-number">02</p><div><h2>Customer details</h2><p>Profile, order statistics, and history.</p></div></div>
-      {detailsLoading && <p className="state-message">Loading customer details…</p>}
-      {!detailsLoading && detailsError && <p className="message error-message details-message">{detailsError}</p>}
-      {!detailsLoading && selected && <>
-        <dl className="details-grid customer-profile-grid">
-          <div><dt>Customer name</dt><dd>{selected.customer.name}</dd></div>
-          <div><dt>Phone number</dt><dd>{selected.customer.phone_number}</dd></div>
-          <div><dt>Account created</dt><dd>{formatDate(selected.customer.created_at)}</dd></div>
-          <div><dt>Total orders</dt><dd>{selected.statistics.total_orders}</dd></div>
-          <div><dt>Pending</dt><dd>{selected.statistics.pending_orders}</dd></div>
-          <div><dt>Completed</dt><dd>{selected.statistics.completed_orders}</dd></div>
-          <div><dt>Cancelled</dt><dd>{selected.statistics.cancelled_orders}</dd></div>
-          <div><dt>Total spent</dt><dd className="detail-total">{formatAmount(selected.statistics.total_spent)}</dd></div>
-          <div><dt>Most recent order</dt><dd>{formatDate(selected.statistics.most_recent_order)}</dd></div>
-        </dl>
-        <div className="customer-order-history"><h2>Order history</h2>
-          {selected.orders.length === 0 ? <p className="state-message">This customer has no orders.</p> : <div className="table-wrapper"><table><thead><tr><th>Order Number</th><th>Status</th><th>Total</th><th>Date</th></tr></thead><tbody>{selected.orders.map((order) => <tr key={order.order_number}><td data-label="Order"><strong>{order.order_number}</strong></td><td data-label="Status"><span className={`status-badge status-${order.order_status}`}>{formatStatus(order.order_status)}</span></td><td data-label="Total" className="price-cell">{formatAmount(order.total_amount)}</td><td data-label="Date">{formatDate(order.created_at)}</td></tr>)}</tbody></table></div>}
-        </div>
-      </>}
-    </section>}
-
-    {customerToDelete && <div className="modal-backdrop" role="presentation"><div className="confirmation-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-customer-heading"><p className="eyebrow">Permanent action</p><h2 id="delete-customer-heading">Delete customer account “{customerToDelete.name}”?</h2><p>This will permanently delete:</p><ul className="destructive-summary"><li>1 customer account</li><li>{customerToDelete.total_orders} {customerToDelete.total_orders === 1 ? "order" : "orders"}</li><li>{customerToDelete.order_items_count} {customerToDelete.order_items_count === 1 ? "order item" : "order items"}</li></ul><p>This action cannot be undone.</p>{deleteError && <p className="message error-message">{deleteError}</p>}<div className="dialog-actions"><button type="button" className="secondary-button" onClick={() => setCustomerToDelete(null)} disabled={deleting}>Cancel</button><button type="button" className="danger-button" onClick={handleDelete} disabled={deleting}>{deleting ? "Deleting…" : "Delete Customer"}</button></div></div></div>}
+    {confirmation && <div className="modal-backdrop" role="presentation"><div className="confirmation-dialog" role="dialog" aria-modal="true"><p className="eyebrow">Account action</p><h2>{confirmation.type === "delete" ? "Permanently Delete Customer?" : confirmation.type === "deactivate" ? "Deactivate Customer?" : "Reactivate Customer?"}</h2><p>{confirmation.type === "delete" ? "This action cannot be undone. It is available only when the customer has no order or payment history." : confirmation.type === "deactivate" ? `${confirmation.customer.name} will no longer be able to sign in or access their account. Their business history will remain available.` : `${confirmation.customer.name} will regain access to their account.`}</p>{actionError && <p className="message error-message">{actionError}</p>}<div className="dialog-actions"><button type="button" className="secondary-button" onClick={() => setConfirmation(null)} disabled={acting}>{confirmation.type === "deactivate" ? "Keep Active" : "Cancel"}</button><button type="button" className={confirmation.type === "delete" ? "danger-button" : ""} onClick={confirmAction} disabled={acting}>{acting ? "Updating…" : confirmation.type === "delete" ? "Delete Permanently" : confirmation.type === "deactivate" ? "Deactivate Account" : "Reactivate"}</button></div></div></div>}
   </>;
 }

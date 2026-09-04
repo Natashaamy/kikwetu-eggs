@@ -11,6 +11,17 @@ def authorize(role=None):
         return jsonify({"error": "Authentication required"}), 401
     if role is not None and session.get("role") != role:
         return jsonify({"error": "Forbidden"}), 403
+    if session.get("role") == "customer":
+        from .db import get_db
+        customer = get_db().execute(
+            "SELECT is_active FROM customers WHERE customer_id = ?",
+            (session["user_id"],),
+        ).fetchone()
+        if customer is None or not customer["is_active"]:
+            session.clear()
+            return jsonify({
+                "error": "This account has been deactivated. Please contact Kikwetu Eggs."
+            }), 403
     return None
 
 

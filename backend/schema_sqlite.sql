@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS customers (
     username TEXT UNIQUE,
     phone_number TEXT UNIQUE NOT NULL,
     password_hash TEXT,
+    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

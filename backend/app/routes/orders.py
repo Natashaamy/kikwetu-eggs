@@ -38,7 +38,11 @@ def get_orders():
                 orders.notes,
                 orders.created_at,
                 orders.updated_at,
-                COALESCE({item_summary_expression()}, 'No items') AS item_summary
+                COALESCE({item_summary_expression()}, 'No items') AS item_summary,
+                COALESCE(SUM(order_items.quantity), 0) AS quantity,
+                (SELECT mt.status FROM mpesa_transactions AS mt
+                 WHERE mt.order_id = orders.order_id
+                 ORDER BY mt.transaction_id DESC LIMIT 1) AS mpesa_status
             FROM orders
             JOIN customers ON customers.customer_id = orders.customer_id
             LEFT JOIN order_items ON order_items.order_id = orders.order_id
@@ -113,6 +117,12 @@ def get_order(order_id):
             (order_id,),
         ).fetchone()
         result["mpesa_payment"] = dict(mpesa_payment) if mpesa_payment else None
+        latest_mpesa = database.execute(
+            """SELECT status, result_description FROM mpesa_transactions
+               WHERE order_id = ? ORDER BY transaction_id DESC LIMIT 1""",
+            (order_id,),
+        ).fetchone()
+        result["latest_mpesa"] = dict(latest_mpesa) if latest_mpesa else None
         result["customer"] = {
             "name": result.pop("customer_name"),
             "phone_number": result.pop("customer_phone_number"),
