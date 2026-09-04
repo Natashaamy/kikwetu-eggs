@@ -11,17 +11,17 @@ async function readResponse(response) {
 }
 
 export async function getOrders() {
-  const response = await fetch(ORDERS_URL);
+  const response = await apiFetch(ORDERS_URL);
   return readResponse(response);
 }
 
 export async function getOrder(orderId) {
-  const response = await fetch(`${ORDERS_URL}/${orderId}`);
+  const response = await apiFetch(`${ORDERS_URL}/${orderId}`);
   return readResponse(response);
 }
 
 export async function createOrder(order) {
-  const response = await fetch(ORDERS_URL, {
+  const response = await apiFetch(ORDERS_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -33,7 +33,7 @@ export async function createOrder(order) {
 }
 
 export async function addOrderItem(orderId, item) {
-  const response = await fetch(`${ORDERS_URL}/${orderId}/items`, {
+  const response = await apiFetch(`${ORDERS_URL}/${orderId}/items`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -45,7 +45,7 @@ export async function addOrderItem(orderId, item) {
 }
 
 export async function updateOrder(orderId, updates) {
-  const response = await fetch(`${ORDERS_URL}/${orderId}`, {
+  const response = await apiFetch(`${ORDERS_URL}/${orderId}`, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
@@ -57,7 +57,7 @@ export async function updateOrder(orderId, updates) {
 }
 
 export async function deleteOrder(orderId) {
-  const response = await fetch(`${ORDERS_URL}/${orderId}`, {
+  const response = await apiFetch(`${ORDERS_URL}/${orderId}`, {
     method: "DELETE",
   });
 
@@ -65,10 +65,11 @@ export async function deleteOrder(orderId) {
 }
 
 export async function recordOrderPayment(orderId, paymentMethod) {
-  const response = await fetch(`${ORDERS_URL}/${orderId}/payment`, {
+  const response = await apiFetch(`${ORDERS_URL}/${orderId}/payment`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ payment_status: "paid", payment_method: paymentMethod }),
   });
   return readResponse(response);
 }
+import { apiFetch } from "./config.js";

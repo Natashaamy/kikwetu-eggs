@@ -9,7 +9,7 @@ function queryString(fromDate, toDate) {
 }
 
 export async function getReport(fromDate, toDate) {
-  const response = await fetch(`${REPORTS_URL}${queryString(fromDate, toDate)}`);
+  const response = await apiFetch(`${REPORTS_URL}${queryString(fromDate, toDate)}`);
   const data = await response.json().catch(() => null);
   if (!response.ok) {
     throw new Error(data?.error || "The report could not be loaded.");
@@ -17,6 +17,12 @@ export async function getReport(fromDate, toDate) {
   return data;
 }
 
-export function getReportExportUrl(fromDate, toDate) {
-  return `${REPORTS_URL}/export.csv${queryString(fromDate, toDate)}`;
+export async function downloadReportCsv(fromDate, toDate) {
+  const response = await apiFetch(`${REPORTS_URL}/export.csv${queryString(fromDate, toDate)}`);
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    throw new Error(data?.error || "The report export could not be downloaded.");
+  }
+  return response.blob();
 }
+import { apiFetch } from "./config.js";

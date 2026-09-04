@@ -1,7 +1,9 @@
+import { apiFetch } from "./config.js";
+
 const AUTH_URL = "/api/auth";
 
 async function request(path, options = {}) {
-  const response = await fetch(`${AUTH_URL}${path}`, { credentials: "same-origin", ...options });
+  const response = await apiFetch(`${AUTH_URL}${path}`, options);
   const data = await response.json().catch(() => null);
   if (!response.ok) throw new Error(data?.error || "Authentication request failed.");
   return data;

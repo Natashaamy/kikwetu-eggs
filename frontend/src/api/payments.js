@@ -11,7 +11,7 @@ async function readResponse(response) {
 }
 
 export async function sendMpesaPrompt(orderId) {
-  const response = await fetch(`${MPESA_URL}/stk-push`, {
+  const response = await apiFetch(`${MPESA_URL}/stk-push`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ order_id: orderId }),
@@ -20,6 +20,7 @@ export async function sendMpesaPrompt(orderId) {
 }
 
 export async function getMpesaPaymentStatus(checkoutRequestId) {
-  const response = await fetch(`${MPESA_URL}/status/${encodeURIComponent(checkoutRequestId)}`);
+  const response = await apiFetch(`${MPESA_URL}/status/${encodeURIComponent(checkoutRequestId)}`);
   return readResponse(response);
 }
+import { apiFetch } from "./config.js";

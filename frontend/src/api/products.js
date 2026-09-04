@@ -11,12 +11,12 @@ async function readResponse(response) {
 }
 
 export async function getProducts() {
-  const response = await fetch(PRODUCTS_URL);
+  const response = await apiFetch(PRODUCTS_URL);
   return readResponse(response);
 }
 
 export async function createProduct(product) {
-  const response = await fetch(PRODUCTS_URL, {
+  const response = await apiFetch(PRODUCTS_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -28,7 +28,7 @@ export async function createProduct(product) {
 }
 
 export async function updateProduct(productId, product) {
-  const response = await fetch(`${PRODUCTS_URL}/${productId}`, {
+  const response = await apiFetch(`${PRODUCTS_URL}/${productId}`, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
@@ -40,7 +40,7 @@ export async function updateProduct(productId, product) {
 }
 
 export async function deleteProduct(productId) {
-  const response = await fetch(`${PRODUCTS_URL}/${productId}`, {
+  const response = await apiFetch(`${PRODUCTS_URL}/${productId}`, {
     method: "DELETE",
   });
 
@@ -48,7 +48,7 @@ export async function deleteProduct(productId) {
 }
 
 export async function addProductStock(productId, quantity) {
-  const response = await fetch(`${PRODUCTS_URL}/${productId}/stock`, {
+  const response = await apiFetch(`${PRODUCTS_URL}/${productId}/stock`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ quantity }),
@@ -57,10 +57,11 @@ export async function addProductStock(productId, quantity) {
 }
 
 export async function setProductStock(productId, stockQuantity) {
-  const response = await fetch(`${PRODUCTS_URL}/${productId}/stock`, {
+  const response = await apiFetch(`${PRODUCTS_URL}/${productId}/stock`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ stock_quantity: stockQuantity }),
   });
   return readResponse(response);
 }
+import { apiFetch } from "./config.js";

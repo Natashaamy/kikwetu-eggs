@@ -11,15 +11,16 @@ async function readResponse(response) {
 }
 
 export async function getAdminCustomers() {
-  return readResponse(await fetch(ADMIN_CUSTOMERS_URL));
+  return readResponse(await apiFetch(ADMIN_CUSTOMERS_URL));
 }
 
 export async function getAdminCustomer(customerId) {
-  return readResponse(await fetch(`${ADMIN_CUSTOMERS_URL}/${customerId}`));
+  return readResponse(await apiFetch(`${ADMIN_CUSTOMERS_URL}/${customerId}`));
 }
 
 export async function deleteAdminCustomer(customerId) {
-  return readResponse(await fetch(`${ADMIN_CUSTOMERS_URL}/${customerId}`, {
+  return readResponse(await apiFetch(`${ADMIN_CUSTOMERS_URL}/${customerId}`, {
     method: "DELETE",
   }));
 }
+import { apiFetch } from "./config.js";

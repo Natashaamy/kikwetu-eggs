@@ -11,7 +11,7 @@ async function readResponse(response) {
 }
 
 export async function placeCustomerOrder(order) {
-  const response = await fetch(CUSTOMER_ORDERS_URL, {
+  const response = await apiFetch(CUSTOMER_ORDERS_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(order),
@@ -19,3 +19,4 @@ export async function placeCustomerOrder(order) {
 
   return readResponse(response);
 }
+import { apiFetch } from "./config.js";

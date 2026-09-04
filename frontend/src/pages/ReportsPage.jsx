@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { getReport, getReportExportUrl } from "../api/reports.js";
+import { downloadReportCsv, getReport } from "../api/reports.js";
 
 const currencyFormatter = new Intl.NumberFormat("en-KE", {
   style: "currency",
@@ -35,6 +35,7 @@ export default function ReportsPage() {
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [exporting, setExporting] = useState(false);
 
   async function loadReport(nextFrom = fromDate, nextTo = toDate) {
     if (nextFrom && nextTo && nextFrom > nextTo) {
@@ -72,6 +73,26 @@ export default function ReportsPage() {
     loadReport(nextFrom, nextTo);
   }
 
+  async function exportReport() {
+    setExporting(true);
+    setError("");
+    try {
+      const reportBlob = await downloadReportCsv(fromDate, toDate);
+      const downloadUrl = URL.createObjectURL(reportBlob);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = `kikwetu-eggs-report-${fromDate || "all"}-to-${toDate || "all"}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(downloadUrl);
+    } catch (requestError) {
+      setError(requestError.message || "The report export could not be downloaded.");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const summary = report?.summary;
   const statusRows = summary ? [
     ["pending", summary.pending_orders],
@@ -83,7 +104,7 @@ export default function ReportsPage() {
   return <>
     <section className="page-heading">
       <div><p className="eyebrow">Business intelligence</p><h1>Reports</h1><p className="page-description">Review sales, orders, products, and customers using current database records.</p></div>
-      {report && <a className="primary-link" href={getReportExportUrl(fromDate, toDate)}>Export CSV</a>}
+      {report && <button type="button" className="primary-link" onClick={exportReport} disabled={exporting}>{exporting ? "Exporting…" : "Export CSV"}</button>}
     </section>
 
     <section className="report-controls" aria-label="Report date range">

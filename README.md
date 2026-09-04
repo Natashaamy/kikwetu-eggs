@@ -68,7 +68,16 @@ Required Render variables:
 
 - `DATABASE_URL` — supplied by the linked Render PostgreSQL database.
 - `SECRET_KEY` — a long random value used to sign Flask sessions.
+- `FRONTEND_URL=https://YOUR-NETLIFY-SITE.netlify.app` — the exact Netlify
+  origin permitted to make credentialed API requests (no trailing slash).
 - `FLASK_HTTPS=1` — enables secure session cookies behind Render HTTPS.
+
+The backend permits credentialed cross-origin requests only from
+`FRONTEND_URL` and only for `/api/*`. In production, `FLASK_HTTPS=1` changes
+the session cookie to `Secure`, `HttpOnly`, and `SameSite=None`, allowing the
+Netlify frontend to send it to the HTTPS Render API. Local HTTP development
+defaults to `http://localhost:5173` with `SameSite=Lax` and a non-secure cookie;
+these local defaults must not be used for the deployed service.
 
 M-Pesa sandbox variables, when payment testing is enabled:
 
