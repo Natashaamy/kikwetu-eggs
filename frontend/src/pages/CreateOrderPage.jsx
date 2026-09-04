@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { placeCustomerOrder } from "../api/customerOrders.js";
+import { getCustomerOrder, updateCustomerOrder } from "../api/customerPortal.js";
 import { getProducts } from "../api/products.js";
 import { useAuth } from "../context/AuthContext.jsx";
 
@@ -23,25 +24,48 @@ function formatAmount(amount) {
 function CreateOrderPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const editOrderId = Number(searchParams.get("edit") || location.state?.editOrderId) || null;
+  const editing = editOrderId !== null;
   const [products, setProducts] = useState([]);
   const [form, setForm] = useState(EMPTY_FORM);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [formError, setFormError] = useState("");
+  const [editOrder, setEditOrder] = useState(null);
 
   useEffect(() => {
     let ignoreResult = false;
 
     async function loadProducts() {
       try {
-        const data = await getProducts();
+        const [data, existingOrder] = await Promise.all([
+          getProducts(),
+          editing ? getCustomerOrder(editOrderId) : Promise.resolve(null),
+        ]);
         if (!ignoreResult) {
-          setProducts(data.products || []);
+          const availableProducts = data.products || [];
+          if (existingOrder) {
+            const currentProduct = {
+              product_id: existingOrder.product_id,
+              name: existingOrder.product_name,
+              unit_name: existingOrder.unit_name,
+              unit_price: existingOrder.unit_price,
+            };
+            setProducts(availableProducts.some((product) => product.product_id === currentProduct.product_id)
+              ? availableProducts : [currentProduct, ...availableProducts]);
+            setEditOrder(existingOrder);
+            setForm({ product_id: String(existingOrder.product_id), quantity: String(existingOrder.quantity) });
+            if (!existingOrder.can_edit) setLoadError(existingOrder.edit_block_reason || "This order cannot be edited.");
+          } else {
+            setProducts(availableProducts);
+          }
         }
-      } catch {
+      } catch (error) {
         if (!ignoreResult) {
-          setLoadError("Products could not be loaded. Please try again later.");
+          setLoadError(error.message || "Order information could not be loaded. Please try again later.");
         }
       } finally {
         if (!ignoreResult) {
@@ -54,7 +78,7 @@ function CreateOrderPage() {
     return () => {
       ignoreResult = true;
     };
-  }, []);
+  }, [editOrderId, editing]);
 
   const selectedProduct = useMemo(
     () =>
@@ -94,13 +118,16 @@ function CreateOrderPage() {
     setSubmitting(true);
 
     try {
-      const result = await placeCustomerOrder({
+      const payload = {
         product_id: productId,
         quantity: orderQuantity,
-      });
+      };
+      const result = editing
+        ? await updateCustomerOrder(editOrderId, payload)
+        : await placeCustomerOrder(payload);
       navigate("/customer/orders", {
         replace: true,
-        state: { newlyCreatedOrder: result },
+        state: editing ? { updatedOrder: result } : { newlyCreatedOrder: result },
       });
     } catch (error) {
       setFormError(error.message);
@@ -115,10 +142,10 @@ function CreateOrderPage() {
     <>
       <section className="page-heading">
         <div>
-          <p className="eyebrow">Fresh eggs, simple ordering</p>
-          <h1>Order Now</h1>
+          <p className="eyebrow">{editing ? `Order ${editOrder?.order_number || ""}` : "Fresh eggs, simple ordering"}</p>
+          <h1>{editing ? "Edit Order" : "Order Now"}</h1>
           <p className="page-description">
-            Choose a product and see your total before ordering.
+            {editing ? "Update the product or quantity before payment is completed." : "Choose a product and see your total before ordering."}
           </p>
         </div>
       </section>
@@ -128,7 +155,7 @@ function CreateOrderPage() {
           <div className="panel-heading">
             <p className="section-number">01</p>
             <div>
-              <h2 id="order-form-heading">Place your order</h2>
+              <h2 id="order-form-heading">{editing ? "Update your order" : "Place your order"}</h2>
               <p>Ordering as {user?.name}</p>
             </div>
           </div>
@@ -149,7 +176,7 @@ function CreateOrderPage() {
             </div>
           )}
 
-          {!loading && !loadError && products.length > 0 && (
+          {!loading && !loadError && products.length > 0 && (!editing || editOrder?.can_edit) && (
             <form className="customer-order-form" onSubmit={handleSubmit}>
               <fieldset>
                 <legend>Order Details</legend>
@@ -191,7 +218,7 @@ function CreateOrderPage() {
               {formError && <p className="message error-message">{formError}</p>}
 
               <button type="submit" disabled={submitting}>
-                {submitting ? "Placing your order…" : "Order Now"}
+                {submitting ? (editing ? "Updating your order…" : "Placing your order…") : (editing ? "Update Order" : "Order Now")}
               </button>
             </form>
           )}

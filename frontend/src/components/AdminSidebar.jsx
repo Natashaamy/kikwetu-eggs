@@ -15,7 +15,7 @@ function AdminSidebar({ onNavigate }) {
   return <nav className="sidebar-navigation" aria-label="Admin navigation">
     <p className="sidebar-label">Admin</p>
     {links.map(([to, label]) => <NavLink key={to} to={to} onClick={onNavigate}>{label}</NavLink>)}
-    <button type="button" className="sidebar-logout" onClick={handleLogout}>Logout</button>
+    <button type="button" className="sidebar-logout" onClick={handleLogout}><span aria-hidden="true">↪</span> Logout</button>
   </nav>;
 }
 

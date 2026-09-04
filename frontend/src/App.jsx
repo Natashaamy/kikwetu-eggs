@@ -34,7 +34,8 @@ function App() {
         <Route path="/customer" element={<CustomerLayout />}>
           <Route index element={<Navigate to="dashboard" replace />} />
           <Route path="dashboard" element={<CustomerDashboardPage />} />
-          <Route path="order" element={<CreateOrderPage />} />
+          <Route path="order-now" element={<CreateOrderPage />} />
+          <Route path="order" element={<Navigate to="../order-now" replace />} />
           <Route path="orders" element={<MyOrdersPage />} />
           <Route path="profile" element={<CustomerProfilePage />} />
         </Route>
@@ -42,7 +43,7 @@ function App() {
       <Route path="/dashboard" element={<Navigate to="/admin/dashboard" replace />} />
       <Route path="/products" element={<Navigate to="/admin/products" replace />} />
       <Route path="/orders" element={<Navigate to="/admin/orders" replace />} />
-      <Route path="/order" element={<Navigate to="/customer/order" replace />} />
+      <Route path="/order" element={<Navigate to="/customer/order-now" replace />} />
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>
   );

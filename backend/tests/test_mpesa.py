@@ -29,6 +29,13 @@ class MpesaTests(unittest.TestCase):
                    VALUES (?, 'ORD-000001', 'pending', 200)""",
                 (customer_id,),
             ).lastrowid
+            product_id = database.execute(
+                "INSERT INTO products(name, unit_name, unit_price, stock_quantity) VALUES ('Egg', 'egg', 20, 10)"
+            ).lastrowid
+            database.execute(
+                "INSERT INTO order_items(order_id, product_id, quantity, unit_price, line_total) VALUES (?, ?, 10, 20, 200)",
+                (order_id, product_id),
+            )
             database.commit()
         self.app = create_app({"TESTING": True, "DATABASE_URL": None, "DATABASE": self.database_path, "SECRET_KEY": "test"})
         self.client = self.app.test_client()
@@ -73,6 +80,8 @@ class MpesaTests(unittest.TestCase):
             customer_session["role"] = "customer"
         response = self.client.post("/api/payments/mpesa/stk-push", json={"order_id": 1})
         self.assertEqual(response.status_code, 202)
+        duplicate = self.client.post("/api/payments/mpesa/stk-push", json={"order_id": 1})
+        self.assertEqual(duplicate.status_code, 409)
         initiate.assert_called_once_with(
             phone_number="0712345678", amount=200, order_number="ORD-000001"
         )
@@ -115,6 +124,9 @@ class MpesaTests(unittest.TestCase):
         cancellation = self.client.patch("/api/customer/orders/1/cancel")
         self.assertEqual(cancellation.status_code, 400)
         self.assertEqual(cancellation.get_json()["error"], "Completed orders cannot be cancelled")
+        edit = self.client.patch("/api/customer/orders/1", json={"product_id": 1, "quantity": 1})
+        self.assertEqual(edit.status_code, 400)
+        self.assertEqual(edit.get_json()["error"], "Completed orders cannot be edited")
 
     def test_failed_mpesa_callback_does_not_pay_or_complete_order(self):
         with closing(sqlite3.connect(self.database_path)) as database:
