@@ -94,6 +94,10 @@ class CustomerCheckoutTests(unittest.TestCase):
     def test_existing_admin_cash_confirmation_still_works(self):
         order = self.client.post("/api/customer-orders", json={"product_id": 1, "quantity": 1}).get_json()
         self.client.patch(f"/api/customer/orders/{order['order_id']}/payment-method", json={"payment_method": "cash"})
+        with closing(sqlite3.connect(self.database_path)) as database:
+            stock_before_confirmation = database.execute(
+                "SELECT stock_quantity FROM products WHERE product_id = 1"
+            ).fetchone()[0]
         with self.client.session_transaction() as admin_session:
             admin_session["user_id"] = 1
             admin_session["role"] = "admin"
@@ -102,8 +106,33 @@ class CustomerCheckoutTests(unittest.TestCase):
             json={"payment_status": "paid", "payment_method": "cash"},
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json()["payment_status"], "paid")
-        self.assertIsNotNone(response.get_json()["paid_at"])
+        result = response.get_json()
+        self.assertEqual(result["order_status"], "completed")
+        self.assertEqual(result["payment_status"], "paid")
+        self.assertEqual(result["payment_method"], "cash")
+        self.assertIsNotNone(result["paid_at"])
+        with closing(sqlite3.connect(self.database_path)) as database:
+            stock_after_confirmation = database.execute(
+                "SELECT stock_quantity FROM products WHERE product_id = 1"
+            ).fetchone()[0]
+        self.assertEqual(stock_after_confirmation, stock_before_confirmation)
+
+        self.login_customer()
+        cancellation = self.client.patch(f"/api/customer/orders/{order['order_id']}/cancel")
+        self.assertEqual(cancellation.status_code, 400)
+        self.assertEqual(cancellation.get_json()["error"], "Completed orders cannot be cancelled")
+
+    def test_bank_transfer_confirmation_does_not_complete_order(self):
+        order = self.client.post("/api/customer-orders", json={"product_id": 1, "quantity": 1}).get_json()
+        with self.client.session_transaction() as admin_session:
+            admin_session["user_id"] = 1
+            admin_session["role"] = "admin"
+        response = self.client.patch(
+            f"/api/orders/{order['order_id']}/payment",
+            json={"payment_status": "paid", "payment_method": "bank_transfer"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["order_status"], "pending")
 
 
 if __name__ == "__main__":

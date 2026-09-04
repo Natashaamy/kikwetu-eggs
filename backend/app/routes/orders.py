@@ -127,7 +127,7 @@ def get_order(order_id):
 
 @orders_bp.patch("/<int:order_id>/payment")
 def record_order_payment(order_id):
-    """Record one manual payment without changing the order status."""
+    """Record a manual payment and complete confirmed cash orders."""
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify({"error": "Request body must contain valid JSON"}), 400
@@ -163,13 +163,15 @@ def record_order_payment(order_id):
             return jsonify({"error": "An M-Pesa payment request is still pending for this order"}), 409
 
         database.execute(
-            """UPDATE orders SET payment_status = 'paid', payment_method = ?,
+            """UPDATE orders SET
+                      order_status = CASE WHEN ? = 'cash' THEN 'completed' ELSE order_status END,
+                      payment_status = 'paid', payment_method = ?,
                       paid_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
                WHERE order_id = ?""",
-            (payment_method, order_id),
+            (payment_method, payment_method, order_id),
         )
         payment = database.execute(
-            """SELECT order_id, payment_status, payment_method, paid_at
+            """SELECT order_id, order_status, payment_status, payment_method, paid_at
                FROM orders WHERE order_id = ?""",
             (order_id,),
         ).fetchone()
