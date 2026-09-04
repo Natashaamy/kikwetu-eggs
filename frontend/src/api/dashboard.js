@@ -1,0 +1,12 @@
+const DASHBOARD_URL = "/api/dashboard";
+
+export async function getDashboard() {
+  const response = await fetch(DASHBOARD_URL);
+  const data = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new Error(data?.error || "The dashboard could not be loaded.");
+  }
+
+  return data;
+}

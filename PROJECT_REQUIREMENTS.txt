@@ -1,0 +1,18 @@
+CHICKEN BUSINESS ORDERING SYSTEM
+
+CUSTOMER FEATURES
+1. Customer can order eggs.
+2. Customer can enter egg quantity.
+3. System calculates total price.
+4. Customer can choose M-Pesa payment.
+5. Customer can choose cash payment.
+6. Customer receives order confirmation.
+
+ADMIN FEATURES
+1. Admin can login.
+2. Admin can view orders.
+3. Admin receives notification of new orders.
+4. Admin can track sales.
+5. Admin can track transactions.
+6. Admin can view customer orders.
+7. Admin can view order history.
