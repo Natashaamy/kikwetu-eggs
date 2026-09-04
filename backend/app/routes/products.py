@@ -3,7 +3,7 @@
 import math
 import sqlite3
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, session
 
 from ..db import get_db
 from ..auth import authorize
@@ -23,23 +23,25 @@ def get_products():
     database = get_db()
 
     try:
-        rows = database.execute(
-            """
-            SELECT
-                product_id,
-                name,
-                description,
-                unit_name,
-                unit_price,
-                stock_quantity,
-                low_stock_threshold,
-                is_active,
-                created_at,
-                updated_at
-            FROM products
-            ORDER BY created_at DESC, product_id DESC
-            """
-        ).fetchall()
+        if session.get("role") == "admin":
+            rows = database.execute(
+                """
+                SELECT product_id, name, description, unit_name, unit_price,
+                       stock_quantity, low_stock_threshold, is_active,
+                       created_at, updated_at
+                FROM products
+                ORDER BY created_at DESC, product_id DESC
+                """
+            ).fetchall()
+        else:
+            rows = database.execute(
+                """
+                SELECT product_id, name, description, unit_name, unit_price
+                FROM products
+                WHERE is_active AND stock_quantity > 0
+                ORDER BY name, product_id
+                """
+            ).fetchall()
         return jsonify({"products": [dict(row) for row in rows]}), 200
     except sqlite3.Error:
         return jsonify({
@@ -53,24 +55,21 @@ def get_product(product_id):
     database = get_db()
 
     try:
-        row = database.execute(
-            """
-            SELECT
-                product_id,
-                name,
-                description,
-                unit_name,
-                unit_price,
-                stock_quantity,
-                low_stock_threshold,
-                is_active,
-                created_at,
-                updated_at
-            FROM products
-            WHERE product_id = ?
-            """,
-            (product_id,),
-        ).fetchone()
+        if session.get("role") == "admin":
+            row = database.execute(
+                """SELECT product_id, name, description, unit_name, unit_price,
+                          stock_quantity, low_stock_threshold, is_active,
+                          created_at, updated_at
+                   FROM products WHERE product_id = ?""",
+                (product_id,),
+            ).fetchone()
+        else:
+            row = database.execute(
+                """SELECT product_id, name, description, unit_name, unit_price
+                   FROM products
+                   WHERE product_id = ? AND is_active AND stock_quantity > 0""",
+                (product_id,),
+            ).fetchone()
 
         if row is None:
             return jsonify({"error": "Product not found"}), 404

@@ -454,10 +454,10 @@ def update_order(order_id):
                     return jsonify({
                         "error": "Order is already cancelled"
                     }), 400
-                if current_status != "pending":
+                if current_status not in {"pending", "processing"}:
                     database.rollback()
                     return jsonify({
-                        "error": "Only pending orders can be cancelled"
+                        "error": "Only unpaid pending or processing orders can be cancelled"
                     }), 400
 
             if order_status == "completed" and current_status == "cancelled":

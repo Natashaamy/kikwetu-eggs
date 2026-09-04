@@ -2,7 +2,7 @@
 
 import sqlite3
 
-from flask import Blueprint, jsonify, session
+from flask import Blueprint, jsonify, request, session
 
 from ..auth import customer_required
 from ..db import get_db, item_summary_expression
@@ -71,6 +71,68 @@ def customer_orders():
         return jsonify({"error": "Customer orders could not be loaded"}), 500
 
 
+@customer_portal_bp.patch("/orders/<int:order_id>/payment-method")
+@customer_required
+def select_customer_payment_method(order_id):
+    """Record a customer's cash choice without recording a payment."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or data.get("payment_method") != "cash":
+        return jsonify({"error": "payment_method must be cash"}), 400
+
+    database = get_db()
+    try:
+        database.begin()
+        order = database.execute(
+            """SELECT order_status, payment_status, payment_method
+               FROM orders WHERE order_id = ? AND customer_id = ?""",
+            (order_id, session["user_id"]),
+        ).fetchone()
+        if order is None:
+            database.rollback()
+            return jsonify({"error": "Order not found"}), 404
+        if order["order_status"] == "cancelled":
+            database.rollback()
+            return jsonify({"error": "Cancelled orders cannot select a payment method"}), 400
+        if order["payment_status"] == "paid":
+            database.rollback()
+            return jsonify({"error": "This order has already been paid"}), 400
+        if order["payment_method"] == "cash":
+            database.rollback()
+            return jsonify({"error": "Cash payment has already been selected"}), 400
+        if database.execute(
+            "SELECT 1 FROM mpesa_transactions WHERE order_id = ? AND status = 'pending'",
+            (order_id,),
+        ).fetchone():
+            database.rollback()
+            return jsonify({"error": "An M-Pesa payment request is still pending"}), 409
+
+        database.execute(
+            """UPDATE orders
+               SET order_status = 'processing', payment_status = 'unpaid',
+                   payment_method = 'cash', paid_at = NULL,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE order_id = ? AND customer_id = ?""",
+            (order_id, session["user_id"]),
+        )
+        updated = database.execute(
+            """SELECT order_id, order_number, order_status, payment_status,
+                      payment_method, paid_at
+               FROM orders WHERE order_id = ?""",
+            (order_id,),
+        ).fetchone()
+        database.commit()
+        return jsonify({
+            "message": "Cash payment selected. Please pay when your order is fulfilled.",
+            **dict(updated),
+        }), 200
+    except sqlite3.IntegrityError:
+        database.rollback()
+        return jsonify({"error": "The payment method could not be selected"}), 400
+    except sqlite3.Error:
+        database.rollback()
+        return jsonify({"error": "The payment method could not be selected"}), 500
+
+
 @customer_portal_bp.patch("/orders/<int:order_id>/cancel")
 @customer_required
 def cancel_customer_order(order_id):
@@ -90,9 +152,9 @@ def cancel_customer_order(order_id):
         if order["order_status"] == "cancelled":
             database.rollback()
             return jsonify({"error": "Order is already cancelled"}), 400
-        if order["order_status"] != "pending":
+        if order["order_status"] not in {"pending", "processing"}:
             database.rollback()
-            return jsonify({"error": "Only pending orders can be cancelled"}), 400
+            return jsonify({"error": "Only unpaid orders can be cancelled"}), 400
         if database.execute(
             "SELECT 1 FROM mpesa_transactions WHERE order_id = ? AND status = 'pending'",
             (order_id,),

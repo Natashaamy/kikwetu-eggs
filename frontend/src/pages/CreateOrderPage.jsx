@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
 import { placeCustomerOrder } from "../api/customerOrders.js";
-import { cancelCustomerOrder } from "../api/customerPortal.js";
 import { getProducts } from "../api/products.js";
 import { useAuth } from "../context/AuthContext.jsx";
 
@@ -23,16 +22,13 @@ function formatAmount(amount) {
 
 function CreateOrderPage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [products, setProducts] = useState([]);
   const [form, setForm] = useState(EMPTY_FORM);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [formError, setFormError] = useState("");
-  const [orderResult, setOrderResult] = useState(null);
-  const [cancelling, setCancelling] = useState(false);
-  const [cancelError, setCancelError] = useState("");
-  const [cancelMessage, setCancelMessage] = useState("");
 
   useEffect(() => {
     let ignoreResult = false;
@@ -41,7 +37,7 @@ function CreateOrderPage() {
       try {
         const data = await getProducts();
         if (!ignoreResult) {
-          setProducts((data.products || []).filter((product) => product.is_active));
+          setProducts(data.products || []);
         }
       } catch {
         if (!ignoreResult) {
@@ -77,15 +73,11 @@ function CreateOrderPage() {
     const { name, value } = event.target;
     setForm((currentForm) => ({ ...currentForm, [name]: value }));
     setFormError("");
-    setOrderResult(null);
-    setCancelError("");
-    setCancelMessage("");
   }
 
   async function handleSubmit(event) {
     event.preventDefault();
     setFormError("");
-    setOrderResult(null);
 
     const productId = Number(form.product_id);
     const orderQuantity = Number(form.quantity);
@@ -99,11 +91,6 @@ function CreateOrderPage() {
       setFormError("Quantity must be a positive whole number.");
       return;
     }
-    if (orderQuantity > selectedProduct.stock_quantity) {
-      setFormError(`Only ${selectedProduct.stock_quantity} ${selectedProduct.unit_name}${selectedProduct.stock_quantity === 1 ? "" : "s"} are currently available.`);
-      return;
-    }
-
     setSubmitting(true);
 
     try {
@@ -111,55 +98,14 @@ function CreateOrderPage() {
         product_id: productId,
         quantity: orderQuantity,
       });
-      setOrderResult(result);
-      setProducts((current) => current.map((product) =>
-        product.product_id === productId
-          ? { ...product, stock_quantity: product.stock_quantity - orderQuantity }
-          : product,
-      ));
-      setForm(EMPTY_FORM);
+      navigate("/customer/orders", {
+        replace: true,
+        state: { newlyCreatedOrder: result },
+      });
     } catch (error) {
       setFormError(error.message);
     } finally {
       setSubmitting(false);
-    }
-  }
-
-  async function handleCancelOrder() {
-    if (!orderResult || orderResult.order_status !== "pending") {
-      return;
-    }
-
-    const confirmed = window.confirm(
-      "Are you sure you want to cancel this order?",
-    );
-
-    if (!confirmed) {
-      return;
-    }
-
-    setCancelling(true);
-    setCancelError("");
-    setCancelMessage("");
-
-    try {
-      const updatedOrder = await cancelCustomerOrder(orderResult.order_id);
-      setOrderResult((currentResult) => ({
-        ...currentResult,
-        order_status: updatedOrder.order_status,
-      }));
-      setProducts((current) => current.map((product) =>
-        product.product_id === orderResult.product_id
-          ? { ...product, stock_quantity: product.stock_quantity + orderResult.quantity }
-          : product,
-      ));
-      setCancelMessage("Order cancelled successfully");
-    } catch {
-      setCancelError(
-        "This order could not be cancelled. Its status may have already changed.",
-      );
-    } finally {
-      setCancelling(false);
     }
   }
 
@@ -218,8 +164,8 @@ function CreateOrderPage() {
                     >
                       <option value="">Choose a product</option>
                       {products.map((product) => (
-                        <option key={product.product_id} value={product.product_id} disabled={product.stock_quantity === 0}>
-                          {product.name} — {formatAmount(product.unit_price)} / {product.unit_name} — {product.stock_quantity === 0 ? "Out of Stock" : `${product.stock_quantity} available`}
+                        <option key={product.product_id} value={product.product_id}>
+                          {product.name} — {formatAmount(product.unit_price)}
                         </option>
                       ))}
                     </select>
@@ -231,7 +177,6 @@ function CreateOrderPage() {
                       name="quantity"
                       type="number"
                       min="1"
-                      max={selectedProduct?.stock_quantity || undefined}
                       step="1"
                       inputMode="numeric"
                       value={form.quantity}
@@ -278,46 +223,18 @@ function CreateOrderPage() {
               <dt>Quantity</dt>
               <dd>{Number.isInteger(quantity) && quantity > 0 ? quantity : "—"}</dd>
             </div>
-            <div>
-              <dt>Available stock</dt>
-              <dd>{selectedProduct ? `${selectedProduct.stock_quantity} ${selectedProduct.unit_name}${selectedProduct.stock_quantity === 1 ? "" : "s"}` : "—"}</dd>
-            </div>
+            {selectedProduct && Number.isInteger(quantity) && quantity > 0 && (
+              <div className="calculation-line">
+                <dt>Calculation</dt>
+                <dd>{quantity} × {formatAmount(selectedProduct.unit_price)}</dd>
+              </div>
+            )}
             <div className="summary-total">
               <dt>Total to Pay</dt>
               <dd>{formatAmount(estimatedTotal)}</dd>
             </div>
           </dl>
 
-          {orderResult && (
-            <div className="order-success" role="status">
-              <strong>{orderResult.message}.</strong>
-              <span>Order number: {orderResult.order_number}</span>
-              <span>Total: {formatAmount(orderResult.total_amount)}</span>
-              <span>
-                Status:{" "}
-                <span className={`status-badge status-${orderResult.order_status}`}>
-                  {orderResult.order_status === "cancelled" ? "Cancelled" : "Pending"}
-                </span>
-              </span>
-              {orderResult.order_status === "pending" && (
-                <button
-                  type="button"
-                  className="danger-button"
-                  onClick={handleCancelOrder}
-                  disabled={cancelling}
-                >
-                  {cancelling ? "Cancelling order…" : "Cancel Order"}
-                </button>
-              )}
-              {cancelError && (
-                <p className="message error-message">{cancelError}</p>
-              )}
-              {cancelMessage && (
-                <p className="message success-message">{cancelMessage}</p>
-              )}
-              <Link className="text-link" to="/customer/orders">View order status</Link>
-            </div>
-          )}
         </aside>
       </div>
     </>

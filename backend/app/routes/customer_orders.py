@@ -42,9 +42,8 @@ def place_customer_order():
             return jsonify({"error": "This product is not currently available"}), 400
         if quantity > product["stock_quantity"]:
             database.rollback()
-            unit = product["unit_name"] if product["stock_quantity"] == 1 else f"{product['unit_name']}s"
             return jsonify({
-                "error": f"Only {product['stock_quantity']} {unit} are currently available"
+                "error": "Sorry, the requested quantity is currently unavailable."
             }), 400
 
         temporary_number = f"PENDING-{uuid4().hex}"
@@ -69,7 +68,9 @@ def place_customer_order():
         )
         if stock_update.rowcount != 1:
             database.rollback()
-            return jsonify({"error": "The requested quantity is no longer available"}), 400
+            return jsonify({
+                "error": "Sorry, the requested quantity is currently unavailable."
+            }), 400
         database.execute("UPDATE orders SET total_amount = (SELECT COALESCE(SUM(line_total), 0) FROM order_items WHERE order_id = ?), updated_at = CURRENT_TIMESTAMP WHERE order_id = ?", (order_id, order_id))
         final_order = database.execute("SELECT order_id, order_number, order_status, total_amount FROM orders WHERE order_id = ?", (order_id,)).fetchone()
         database.commit()

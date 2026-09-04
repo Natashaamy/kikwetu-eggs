@@ -10,6 +10,16 @@ async function get(path) {
 export const getCustomerDashboard = () => get("/dashboard");
 export const getCustomerOrders = () => get("/orders");
 export const getCustomerProfile = () => get("/profile");
+export async function selectCashPayment(orderId) {
+  const response = await apiFetch(`${CUSTOMER_PORTAL_URL}/orders/${orderId}/payment-method`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ payment_method: "cash" }),
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(data?.error || "Cash payment could not be selected.");
+  return data;
+}
 export async function cancelCustomerOrder(orderId) {
   const response = await apiFetch(`${CUSTOMER_PORTAL_URL}/orders/${orderId}/cancel`, { method: "PATCH" });
   const data = await response.json().catch(() => null);

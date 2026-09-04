@@ -99,6 +99,14 @@ def stk_push():
                 order["total_amount"],
             ),
         )
+        database.execute(
+            """UPDATE orders
+               SET order_status = 'processing', payment_status = 'unpaid',
+                   payment_method = 'mpesa', paid_at = NULL,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE order_id = ? AND customer_id = ?""",
+            (order_id, session["user_id"]),
+        )
         database.commit()
         current_app.logger.info(
             "M-Pesa STK Push accepted for order %s; checkout %s",
@@ -215,6 +223,7 @@ def callback():
             )
             database.execute(
                 """UPDATE orders SET payment_status = 'paid', payment_method = 'mpesa',
+                          order_status = 'completed',
                           paid_at = COALESCE(paid_at, CURRENT_TIMESTAMP),
                           updated_at = CURRENT_TIMESTAMP
                    WHERE order_id = ?""",

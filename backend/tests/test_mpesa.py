@@ -80,7 +80,11 @@ class MpesaTests(unittest.TestCase):
             saved = database.execute(
                 "SELECT customer_id, amount, status FROM mpesa_transactions WHERE checkout_request_id = 'checkout-2'"
             ).fetchone()
+            order = database.execute(
+                "SELECT order_status, payment_status, payment_method, paid_at FROM orders WHERE order_id = 1"
+            ).fetchone()
         self.assertEqual(saved, (1, 200, "pending"))
+        self.assertEqual(order, ("processing", "unpaid", "mpesa", None))
 
     def test_successful_callback_is_idempotent(self):
         with closing(sqlite3.connect(self.database_path)) as database:
@@ -97,13 +101,46 @@ class MpesaTests(unittest.TestCase):
         self.assertEqual(second.status_code, 200)
         with closing(sqlite3.connect(self.database_path)) as database:
             order = database.execute(
-                "SELECT payment_status, payment_method FROM orders WHERE order_id = 1"
+                "SELECT order_status, payment_status, payment_method, paid_at FROM orders WHERE order_id = 1"
             ).fetchone()
             transaction = database.execute(
                 "SELECT status, mpesa_receipt_number FROM mpesa_transactions WHERE checkout_request_id = 'checkout-1'"
             ).fetchone()
-        self.assertEqual(order, ("paid", "mpesa"))
+        self.assertEqual(order[:3], ("completed", "paid", "mpesa"))
+        self.assertIsNotNone(order[3])
         self.assertEqual(transaction, ("successful", "TEST123456"))
+        with self.client.session_transaction() as customer_session:
+            customer_session["user_id"] = 1
+            customer_session["role"] = "customer"
+        cancellation = self.client.patch("/api/customer/orders/1/cancel")
+        self.assertEqual(cancellation.status_code, 400)
+        self.assertEqual(cancellation.get_json()["error"], "Completed orders cannot be cancelled")
+
+    def test_failed_mpesa_callback_does_not_pay_or_complete_order(self):
+        with closing(sqlite3.connect(self.database_path)) as database:
+            database.execute("UPDATE orders SET order_status = 'processing', payment_method = 'mpesa' WHERE order_id = 1")
+            database.execute(
+                """INSERT INTO mpesa_transactions(
+                       order_id, customer_id, merchant_request_id, checkout_request_id,
+                       phone_number, amount, status
+                   ) VALUES (1, 1, 'merchant-fail', 'checkout-fail', '254712345678', 200, 'pending')"""
+            )
+            database.commit()
+        payload = {"Body": {"stkCallback": {
+            "CheckoutRequestID": "checkout-fail", "ResultCode": 1032,
+            "ResultDesc": "Request cancelled by user",
+        }}}
+        response = self.client.post("/api/payments/mpesa/callback", json=payload)
+        self.assertEqual(response.status_code, 200)
+        with closing(sqlite3.connect(self.database_path)) as database:
+            order = database.execute(
+                "SELECT order_status, payment_status, paid_at FROM orders WHERE order_id = 1"
+            ).fetchone()
+            status = database.execute(
+                "SELECT status FROM mpesa_transactions WHERE checkout_request_id = 'checkout-fail'"
+            ).fetchone()[0]
+        self.assertEqual(order, ("processing", "unpaid", None))
+        self.assertEqual(status, "cancelled")
 
 
 if __name__ == "__main__":

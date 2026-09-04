@@ -830,6 +830,43 @@ td strong {
 .payment-unpaid { color: #8a3426; background: #f5dfda; }
 .payment-pending { color: #755012; background: #f7e9bd; }
 
+/* Modern product inventory */
+.products-heading { margin-bottom: 24px; }
+.add-product-button { padding: 13px 20px; box-shadow: 0 8px 20px rgba(23, 61, 44, 0.16); }
+.inventory-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin-bottom: 24px; }
+.inventory-summary article { position: relative; overflow: hidden; padding: 20px; background: #fff; border: 1px solid #e9e4d9; border-radius: 16px; box-shadow: 0 7px 24px rgba(40, 49, 42, 0.06); }
+.inventory-summary article::before { position: absolute; inset: 0 auto 0 0; width: 5px; content: ""; background: #bd7a28; }
+.inventory-summary span { display: block; color: #687068; font-size: .78rem; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
+.inventory-summary strong { display: block; margin-top: 9px; color: #173d2c; font-family: Georgia, serif; font-size: 2rem; }
+.inventory-summary .summary-in-stock::before { background: #2b7a50; }
+.inventory-summary .summary-low-stock::before { background: #dda72f; }
+.inventory-summary .summary-out-stock::before { background: #a94332; }
+.inventory-panel { padding: 0; overflow: hidden; }
+.inventory-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 24px 26px; border-bottom: 1px solid #e9e4d9; }
+.inventory-panel-heading h2, .inventory-card-top h3 { margin: 0; color: #173d2c; }
+.inventory-panel-heading > span { color: #7a6450; font-weight: 700; }
+.product-inventory-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; padding: 24px; background: #faf9f6; }
+.inventory-product-card { display: flex; flex-direction: column; gap: 18px; min-width: 0; padding: 22px; background: #fff; border: 1px solid #e6e1d5; border-radius: 15px; box-shadow: 0 5px 16px rgba(31, 50, 38, .05); }
+.inventory-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.inventory-card-top h3 { font-size: 1.25rem; }
+.inventory-card-top p { margin: 5px 0 0; color: #747b74; }
+.inventory-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.inventory-metrics div { padding: 12px; background: #f8f5ed; border-radius: 10px; }
+.inventory-metrics span { display: block; margin-bottom: 5px; color: #777d76; font-size: .7rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.inventory-metrics strong { color: #263d31; }
+.inventory-status-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.inventory-status-line small { color: #7c817c; }
+.inventory-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; padding-top: 16px; border-top: 1px solid #ece8de; }
+.inventory-actions button { padding: 8px 11px; font-size: .77rem; }
+.product-editor { width: min(620px, calc(100vw - 32px)); max-height: calc(100vh - 40px); overflow-y: auto; }
+.dialog-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.dialog-close { padding: 0; width: 38px; height: 38px; color: #173d2c; background: #f4efe4; border-radius: 50%; font-size: 1.5rem; line-height: 1; }
+.calculation-line { color: #79521b; }
+.cash-button { color: #402b12; background: #e8b44d; }
+.receipt-reference { display: block; margin-top: 5px; color: #5f685f; }
+.highlighted-order { background: #fff8df; box-shadow: inset 4px 0 #e3aa39; }
+.new-order-label { display: inline-block; margin-left: 7px; padding: 2px 6px; color: #62430f; background: #f2c35c; border-radius: 999px; font-size: .62rem; font-weight: 900; letter-spacing: .05em; text-transform: uppercase; }
+
 .customer-order-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1252,6 +1289,8 @@ td strong {
 }
 
 @media (max-width: 900px) {
+  .inventory-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .product-inventory-grid { grid-template-columns: 1fr; }
   .portal-shell {
     padding-left: 0;
     padding-top: 68px;
@@ -1323,6 +1362,12 @@ td strong {
 }
 
 @media (max-width: 620px) {
+  .inventory-summary { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .inventory-summary article { padding: 15px; }
+  .inventory-summary strong { font-size: 1.55rem; }
+  .product-inventory-grid { padding: 14px; }
+  .inventory-metrics { grid-template-columns: 1fr; }
+  .inventory-actions button { flex: 1 1 calc(50% - 8px); }
   .customer-stats {
     grid-template-columns: 1fr;
   }

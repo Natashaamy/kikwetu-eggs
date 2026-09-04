@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 
-import { cancelCustomerOrder, getCustomerOrders } from "../api/customerPortal.js";
+import { cancelCustomerOrder, getCustomerOrders, selectCashPayment } from "../api/customerPortal.js";
 import { getMpesaPaymentStatus, sendMpesaPrompt } from "../api/payments.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { CustomerOrdersTable } from "./CustomerDashboardPage.jsx";
@@ -10,6 +11,8 @@ const wait = (milliseconds) => new Promise((resolve) => window.setTimeout(resolv
 
 export default function MyOrdersPage() {
   const { user } = useAuth();
+  const location = useLocation();
+  const newOrder = location.state?.newlyCreatedOrder;
   const mounted = useRef(true);
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
@@ -19,6 +22,7 @@ export default function MyOrdersPage() {
   const [sendingPayment, setSendingPayment] = useState(false);
   const [checkingId, setCheckingId] = useState(null);
   const [paymentResult, setPaymentResult] = useState(null);
+  const [selectingCashId, setSelectingCashId] = useState(null);
 
   async function loadOrders() {
     try {
@@ -92,7 +96,7 @@ export default function MyOrdersPage() {
       setPaymentOrder(null);
       setMessage("Payment request sent. Check your phone and enter your M-Pesa PIN.");
       setData((current) => ({ ...current, orders: current.orders.map((order) => order.order_id === orderId
-        ? { ...order, mpesa_status: "pending", checkout_request_id: result.checkout_request_id }
+        ? { ...order, order_status: "processing", payment_method: "mpesa", mpesa_status: "pending", checkout_request_id: result.checkout_request_id }
         : order) }));
       pollPayment(result.checkout_request_id, orderId);
     } catch (requestError) {
@@ -102,13 +106,31 @@ export default function MyOrdersPage() {
     }
   }
 
+  async function chooseCash(order) {
+    if (!window.confirm("Choose cash payment for this order? Payment will remain unpaid until the admin confirms it.")) return;
+    setSelectingCashId(order.order_id);
+    setError("");
+    setMessage("");
+    try {
+      const result = await selectCashPayment(order.order_id);
+      setMessage(result.message);
+      await loadOrders();
+    } catch (requestError) {
+      setError(requestError.message || "Cash payment could not be selected.");
+    } finally {
+      setSelectingCashId(null);
+    }
+  }
+
   function orderActions(order) {
     const paymentPending = order.payment_status === "unpaid" && order.mpesa_status === "pending";
-    const canPay = order.payment_status === "unpaid" && order.order_status !== "cancelled" && !paymentPending;
-    const canCancel = order.order_status === "pending" && order.payment_status === "unpaid" && !paymentPending;
+    const canPayMpesa = order.payment_status === "unpaid" && order.order_status !== "cancelled" && order.payment_method !== "cash" && !paymentPending;
+    const canChooseCash = order.payment_status === "unpaid" && order.order_status === "pending" && !order.payment_method && !paymentPending;
+    const canCancel = ["pending", "processing"].includes(order.order_status) && order.payment_status === "unpaid" && !paymentPending;
     return (
       <div className="row-actions customer-order-actions">
-        {canPay && <button type="button" onClick={() => { setPaymentOrder(order); setError(""); setPaymentResult(null); }}>Pay with M-Pesa</button>}
+        {canPayMpesa && <button type="button" onClick={() => { setPaymentOrder(order); setError(""); setPaymentResult(null); }}>{order.payment_method === "mpesa" ? "Retry M-Pesa" : "Pay with M-Pesa"}</button>}
+        {canChooseCash && <button type="button" className="cash-button" disabled={selectingCashId === order.order_id} onClick={() => chooseCash(order)}>{selectingCashId === order.order_id ? "Selecting…" : "Pay with Cash"}</button>}
         {paymentPending && <button type="button" className="secondary-button" disabled={checkingId === order.order_id} onClick={() => checkPayment(order.checkout_request_id, order.order_id)}>{checkingId === order.order_id ? "Checking…" : "Check Payment Status"}</button>}
         {canCancel && <button type="button" className="danger-button" disabled={cancellingId === order.order_id} onClick={() => cancelOrder(order)}>{cancellingId === order.order_id ? "Cancelling…" : "Cancel Order"}</button>}
       </div>
@@ -118,9 +140,10 @@ export default function MyOrdersPage() {
   return <>
     <section className="page-heading"><div><p className="eyebrow">Customer Portal</p><h1>My Orders</h1><p className="page-description">Review your orders, pay securely with M-Pesa, or cancel an eligible order.</p></div></section>
     {error && <p className="message error-message list-message">{error}</p>}
+    {newOrder && <p className="message success-message list-message" role="status">Order {newOrder.order_number} was placed successfully. Choose how you would like to pay.</p>}
     {message && <p className="message success-message list-message" role="status">{message}</p>}
     {paymentResult && <section className="panel payment-success-panel" aria-labelledby="payment-success-heading"><p className="eyebrow">Payment Successful</p><h2 id="payment-success-heading">{paymentResult.order_number}</h2><dl className="details-grid"><div><dt>Amount</dt><dd>{money.format(paymentResult.amount)}</dd></div><div><dt>Payment Method</dt><dd>M-Pesa</dd></div><div><dt>Receipt</dt><dd>{paymentResult.mpesa_receipt_number}</dd></div><div><dt>Status</dt><dd><span className="payment-badge payment-paid">Paid</span></dd></div></dl></section>}
-    <section className="panel">{!data ? <p className="state-message">Loading your orders…</p> : <CustomerOrdersTable orders={data.orders} actions={orderActions} />}</section>
+    <section className="panel">{!data ? <p className="state-message">Loading your orders…</p> : <CustomerOrdersTable orders={data.orders} actions={orderActions} highlightedOrderId={newOrder?.order_id} />}</section>
     {paymentOrder && <div className="modal-backdrop" role="presentation"><div className="confirmation-dialog" role="dialog" aria-modal="true" aria-labelledby="mpesa-heading"><p className="eyebrow">M-Pesa Payment</p><h2 id="mpesa-heading">Pay {money.format(paymentOrder.total_amount)} with M-Pesa?</h2><p>Phone: <strong>{user?.phone_number}</strong></p><p className="helper-text">We will send a secure M-Pesa prompt to this phone. Enter your PIN only in the M-Pesa prompt—never in Kikwetu Eggs.</p><div className="dialog-actions"><button type="button" className="secondary-button" onClick={() => setPaymentOrder(null)} disabled={sendingPayment}>Cancel</button><button type="button" onClick={initiatePayment} disabled={sendingPayment}>{sendingPayment ? "Sending prompt…" : "Send M-Pesa Prompt"}</button></div></div></div>}
   </>;
 }
