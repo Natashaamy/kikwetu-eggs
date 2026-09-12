@@ -7,8 +7,10 @@ import sqlite3
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from flask_limiter.errors import RateLimitExceeded
 
 from .db import close_db
+from .extensions import limiter
 from .routes.auth_routes import auth_bp
 from .routes.admin_customers import admin_customers_bp
 from .routes.customer_orders import customer_orders_bp
@@ -33,10 +35,13 @@ def create_app(test_config=None):
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="None" if https_enabled else "Lax",
         SESSION_COOKIE_SECURE=https_enabled,
+        TRUST_PROXY_HEADERS=https_enabled,
     )
 
     if test_config is not None:
         app.config.update(test_config)
+
+    limiter.init_app(app)
 
     frontend_url = app.config["FRONTEND_URL"]
     if not frontend_url or frontend_url == "*":
@@ -73,5 +78,9 @@ def create_app(test_config=None):
     def handle_database_error(error):
         app.logger.error("A database operation failed", exc_info=error)
         return jsonify({"error": "The database is temporarily unavailable"}), 500
+
+    @app.errorhandler(RateLimitExceeded)
+    def handle_rate_limit(error):
+        return jsonify({"error": "Too many attempts. Please try again later."}), 429
 
     return app

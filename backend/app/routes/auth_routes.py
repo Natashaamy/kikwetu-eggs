@@ -6,6 +6,7 @@ from flask import Blueprint, jsonify, request, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from ..db import get_db
+from ..extensions import limiter
 
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
@@ -25,6 +26,7 @@ def normalize_login_name(name):
 
 
 @auth_bp.post("/register")
+@limiter.limit("3 per minute; 10 per hour", methods=["POST"])
 def register_customer():
     data = valid_json()
     if data is None:
@@ -74,6 +76,7 @@ def register_customer():
 
 
 @auth_bp.post("/login")
+@limiter.limit("5 per minute; 20 per hour", methods=["POST"])
 def login():
     data = valid_json()
     if data is None:
