@@ -86,8 +86,11 @@ defaults to `http://localhost:5173` with `SameSite=Lax` and a non-secure cookie;
 these local defaults must not be used for the deployed service.
 
 Authentication POST requests are rate limited per client IP: login permits
-5 attempts per minute and 20 per hour, while registration permits 3 attempts
-per minute and 10 per hour. In production, the limiter reads Render's
+10 attempts per minute and 30 per hour, while registration permits 3 attempts
+per minute and 10 per hour. Login also permits only 5 attempts per minute and
+20 per hour for each submitted login identifier, independently of its client
+IP. Identifiers use the same whitespace and case normalization as login and
+are stored in limiter keys only as SHA-256 digests. In production, the limiter reads Render's
 documented real-client value from the first `X-Forwarded-For` entry, accepts it
 only when it is a valid IPv4 or IPv6 address, and otherwise falls back to the
 direct connection address. Local HTTP development never trusts forwarded-IP

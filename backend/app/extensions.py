@@ -1,5 +1,6 @@
 """Shared Flask extensions initialized by the application factory."""
 
+from hashlib import sha256
 from ipaddress import ip_address
 
 from flask import current_app, request
@@ -28,6 +29,23 @@ def get_client_ip():
         return remote_address
     forwarded_client = _validated_ip(forwarded_for.split(",", 1)[0])
     return forwarded_client or remote_address
+
+
+def get_login_identifier_key():
+    """Return a fixed-length key for the submitted, normalized login name."""
+    data = request.get_json(silent=True)
+    submitted_identifier = data.get("username") if isinstance(data, dict) else None
+    if submitted_identifier is None:
+        normalized_identifier = "<missing>"
+    else:
+        normalized_identifier = " ".join(
+            str(submitted_identifier).strip().split()
+        ).casefold()
+        if not normalized_identifier:
+            normalized_identifier = "<missing>"
+
+    digest = sha256(normalized_identifier.encode("utf-8")).hexdigest()
+    return f"login-id:{digest}"
 
 
 limiter = Limiter(

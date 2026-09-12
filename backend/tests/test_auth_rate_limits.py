@@ -9,7 +9,7 @@ from pathlib import Path
 from werkzeug.security import generate_password_hash
 
 from app import create_app
-from app.extensions import get_client_ip
+from app.extensions import get_client_ip, get_login_identifier_key
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -85,6 +85,128 @@ class AuthenticationRateLimitTests(unittest.TestCase):
         self.assertTrue(limited.is_json)
         self.assertEqual(limited.get_json(), {"error": RATE_LIMIT_ERROR})
         self.assertIsNotNone(limited.headers.get("Retry-After"))
+
+    def test_one_ip_attacking_many_identifiers_reaches_ip_limit(self):
+        responses = [
+            self.client.post(
+                "/api/auth/login",
+                json={"username": f"Unknown {attempt}", "password": "wrong-password"},
+            )
+            for attempt in range(11)
+        ]
+        self.assertTrue(all(response.status_code == 401 for response in responses[:10]))
+        self.assertEqual(responses[10].status_code, 429)
+        self.assertEqual(responses[10].get_json(), {"error": RATE_LIMIT_ERROR})
+
+    def test_identifier_limit_applies_across_different_client_ips(self):
+        self.app.config["TRUST_PROXY_HEADERS"] = True
+        responses = [
+            self.client.post(
+                "/api/auth/login",
+                json={"username": "Shared Target", "password": "wrong-password"},
+                headers={"X-Forwarded-For": f"203.0.113.{attempt}"},
+            )
+            for attempt in range(1, 7)
+        ]
+        self.assertTrue(all(response.status_code == 401 for response in responses[:5]))
+        self.assertEqual(responses[5].status_code, 429)
+        self.assertEqual(responses[5].get_json(), {"error": RATE_LIMIT_ERROR})
+
+        unaffected = self.client.post(
+            "/api/auth/login",
+            json={"username": "Different Target", "password": "wrong-password"},
+            headers={"X-Forwarded-For": "203.0.113.99"},
+        )
+        self.assertEqual(unaffected.status_code, 401)
+
+    def test_existing_and_nonexistent_identifiers_have_same_limit_behavior(self):
+        self.app.config["TRUST_PROXY_HEADERS"] = True
+        for identifier, address in (
+            ("Rate Test", "203.0.113.20"),
+            ("Does Not Exist", "203.0.113.21"),
+        ):
+            responses = [
+                self.client.post(
+                    "/api/auth/login",
+                    json={"username": identifier, "password": "wrong-password"},
+                    headers={"X-Forwarded-For": address},
+                )
+                for _ in range(6)
+            ]
+            self.assertTrue(all(response.status_code == 401 for response in responses[:5]))
+            self.assertEqual(responses[5].status_code, 429)
+            self.assertEqual(responses[5].get_json(), {"error": RATE_LIMIT_ERROR})
+
+    def test_identifier_normalization_shares_one_bucket(self):
+        variants = [
+            " Natasha ",
+            "natasha",
+            "NATASHA",
+            "  Natasha",
+            "Natasha  ",
+            "NaTaShA",
+        ]
+        responses = [
+            self.client.post(
+                "/api/auth/login",
+                json={"username": identifier, "password": "wrong-password"},
+            )
+            for identifier in variants
+        ]
+        self.assertTrue(all(response.status_code == 401 for response in responses[:5]))
+        self.assertEqual(responses[5].status_code, 429)
+
+    def test_missing_identifier_uses_safe_constant_bucket(self):
+        responses = [
+            self.client.post(
+                "/api/auth/login", json={"password": f"password-{attempt}"}
+            )
+            for attempt in range(6)
+        ]
+        self.assertTrue(all(response.status_code == 401 for response in responses[:5]))
+        self.assertEqual(responses[5].status_code, 429)
+
+    def test_password_does_not_affect_identifier_bucket(self):
+        responses = [
+            self.client.post(
+                "/api/auth/login",
+                json={"username": "Password Independent", "password": f"value-{attempt}"},
+            )
+            for attempt in range(6)
+        ]
+        self.assertTrue(all(response.status_code == 401 for response in responses[:5]))
+        self.assertEqual(responses[5].status_code, 429)
+
+    def test_identifier_key_is_normalized_hashed_and_fixed_length(self):
+        keys = []
+        for identifier in (" Natasha ", "NATASHA", "natasha"):
+            with self.app.test_request_context(
+                "/api/auth/login", method="POST", json={"username": identifier}
+            ):
+                keys.append(get_login_identifier_key())
+        self.assertEqual(len(set(keys)), 1)
+        self.assertEqual(len(keys[0]), len("login-id:") + 64)
+        self.assertNotIn("natasha", keys[0])
+
+    def test_admin_login_still_succeeds_before_limits(self):
+        with closing(sqlite3.connect(self.database_path)) as database:
+            database.execute(
+                """INSERT INTO admins(name, username, email, password_hash)
+                   VALUES (?, ?, ?, ?)""",
+                (
+                    "Administrator",
+                    "administrator",
+                    "admin@example.com",
+                    generate_password_hash("admin-password"),
+                ),
+            )
+            database.commit()
+        response = self.client.post(
+            "/api/auth/login",
+            json={"username": "Administrator", "password": "admin-password"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["role"], "admin")
 
     def test_repeated_registration_attempts_return_json_429(self):
         responses = [
@@ -170,23 +292,22 @@ class AuthenticationRateLimitTests(unittest.TestCase):
 
     def test_limiter_groups_by_first_forwarded_client_ip(self):
         self.app.config["TRUST_PROXY_HEADERS"] = True
-        payload = {"username": "Unknown", "password": "wrong-password"}
-        for proxy_ip in ("10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4", "10.0.0.5"):
+        for attempt in range(10):
             response = self.client.post(
                 "/api/auth/login",
-                json=payload,
-                headers={"X-Forwarded-For": f"203.0.113.40, {proxy_ip}"},
+                json={"username": f"IP Target {attempt}", "password": "wrong-password"},
+                headers={"X-Forwarded-For": f"203.0.113.40, 10.0.0.{attempt + 1}"},
             )
             self.assertEqual(response.status_code, 401)
 
         limited = self.client.post(
             "/api/auth/login",
-            json=payload,
+            json={"username": "IP Target Limited", "password": "wrong-password"},
             headers={"X-Forwarded-For": "203.0.113.40, 10.0.0.99"},
         )
         other_client = self.client.post(
             "/api/auth/login",
-            json=payload,
+            json={"username": "Other Client Target", "password": "wrong-password"},
             headers={"X-Forwarded-For": "203.0.113.41, 10.0.0.99"},
         )
         self.assertEqual(limited.status_code, 429)
