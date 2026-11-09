@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 
 import { loginUser, registerCustomer } from "../api/auth.js";
@@ -13,6 +13,12 @@ export default function AuthPage({ mode }) {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  useEffect(() => {
+    if (!error) return;
+    const timer = setTimeout(() => setError(""), 8000);
+    return () => clearTimeout(timer);
+  }, [error]);
+
   if (!auth.loading && auth.authenticated) {
     return <Navigate to={auth.role === "admin" ? "/admin/dashboard" : "/customer/dashboard"} replace />;
   }
@@ -24,6 +30,8 @@ export default function AuthPage({ mode }) {
 
   async function handleSubmit(event) {
     event.preventDefault();
+    if (submitting) return;
+    setError("");
     if (registering && form.password !== form.confirm_password) {
       setError("Passwords do not match.");
       return;
@@ -62,7 +70,7 @@ export default function AuthPage({ mode }) {
       {registering && <label>Phone Number<input name="phone_number" value={form.phone_number} onChange={handleChange} required autoComplete="tel" /></label>}
       <label>Password<input type="password" name="password" value={form.password} onChange={handleChange} required minLength="8" autoComplete={registering ? "new-password" : "current-password"} /></label>
       {registering && <label>Confirm Password<input type="password" name="confirm_password" value={form.confirm_password} onChange={handleChange} required minLength="8" autoComplete="new-password" /></label>}
-      {error && <p className="message error-message">{error}</p>}
+      {error && <p className="message error-message" role="alert">{error}</p>}
       <button disabled={submitting}>{submitting ? "Please wait…" : registering ? "Register" : "Login"}</button>
     </form>
     <div className="auth-links">

@@ -151,6 +151,31 @@ The Vite development proxy forwards `/api` requests to the local Flask server.
 
 ## Tests
 
+### Login connectivity
+
+The login hotfix is isolated from the financial/payment staging release.
+Authentication requests have a 60-second timeout (including response-body reads),
+clear temporary errors and manual retry. They are never automatically replayed.
+The submit handler retains `finally` cleanup. Run `npm test` from `frontend`
+with Chrome installed and Node 20 or newer for desktop/mobile regression tests.
+
+The inspected production Netlify bundle uses
+`https://kikwetu-eggs-api.onrender.com`, matching the supplied backend URL.
+For this site, verify Render `FRONTEND_URL` is exactly
+`https://sprightly-puffpuff-3b9b21.netlify.app` and `FLASK_HTTPS=1`.
+Netlify build-time `VITE_API_URL` must be the backend HTTPS origin, without `/api`;
+changing it requires a frontend rebuild. Do not replace the exact CORS origin
+with `*`. Credentialed requests require Secure/HttpOnly/SameSite=None session
+cookies over HTTPS; browser third-party-cookie policies can still restrict them.
+
+If the API does not respond, inspect the existing Render deployment/runtime logs
+before changing configuration. Its current startup runs `init_db.py` before
+Gunicorn; a database, DDL, bootstrap or recovery error there prevents the server
+from listening. Do not rerun the initializer against production as a diagnostic.
+Only remove it from the start command after the existing schema is verified and
+the production settings change is authorized. This frontend fix needs no backend
+migration. Deploy only the reviewed login hotfix, not the staging branch.
+
 Run backend tests from `backend/`:
 
 ```powershell

@@ -36,6 +36,12 @@ frontend/node_modules/
 dist/
 frontend/dist/
 
+# Local verification runtimes, credentials and browser artifacts
+.test-venv/
+.staging-local/
+frontend/test-results/
+frontend/playwright-report/
+
 # ==========================================
 # Logs
 # ==========================================
