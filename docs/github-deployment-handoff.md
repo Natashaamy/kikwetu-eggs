@@ -10,9 +10,10 @@ Release branch: `staging/deployment-readiness-2026-11-09`.
 Payment, schema and authentication changes require staging verification. Do not
 merge this branch into a monitored production branch or trigger production
 deployment until the gates in `production-safety-corrections.md` are satisfied.
-Neither provider's monitored branch is confirmed. No hosting credentials or
-site linkage are available locally, and no Render blueprint exists. Do not
-infer hosting branch settings from the repository's `main` branch.
+The user confirmed Netlify monitors `main`; Render screenshots confirm `main`,
+Auto-Deploy On Commit, root `backend`, build `pip install -r requirements.txt`,
+and current start `python init_db.py && gunicorn --bind 0.0.0.0:$PORT "app:create_app()"`.
+The pre-deploy command is empty. No hosting setting has been changed.
 
 ## Verification performed
 
@@ -73,9 +74,66 @@ verification and separate production authorization. Do not run `init_db.py`
 on service startup. Schedule bounded reconciliation only in the approved
 environment; see the deployment checklist.
 
-Outstanding: identify site/service URLs and monitored branches; provision or
-identify separate staging services/database; configure matching staging URL,
-CORS and sandbox callback; run skipped PostgreSQL tests and migration rehearsal;
-verify Linux startup, actual browser authentication/protected routes, console,
-backend logs, database and sandbox order/payment workflows. Netlify and Render
-deployment success cannot be claimed until those checks are observed.
+## Subsequent isolated staging work
+
+A portable PostgreSQL 17.11 server was obtained from EDB's official binary
+distribution, unpacked under ignored `.staging-local`, and bound only to
+`127.0.0.1:55439` with a randomly generated local SCRAM password. No production
+connection string or data was used. This is local verification, not a hosted
+Render staging deployment or a claim about the unknown production major version.
+
+All five originally skipped PostgreSQL tests passed. Five further PostgreSQL
+tests passed for partial payments, idempotency, missed-callback recovery,
+callback-outage recovery and receipt conflicts. These provider responses are
+mocked. A further constraint test checks negative amounts, missing order FKs
+and the unique active-payment-attempt index.
+
+Final combined run: **134 backend tests passed, zero skips**, including all
+11 PostgreSQL tests. The disposable server was stopped after verification;
+its runtime, credentials, data and backup remain ignored by Git.
+
+A separate synthetic legacy-only database was migrated twice; complete row
+fingerprints of seven business tables were unchanged. A custom-format
+`pg_dump` backup was restored with `pg_restore --exit-on-error` into another
+new local database; fingerprints and sequence state matched. Restored schema
+validation and an authenticated financial-report request passed. Flask factory
+startup did not invoke `init_db.py`; Linux/Gunicorn startup remains unverified.
+These local rehearsals do not establish that a production backup can be restored.
+
+`APP_ENV=staging` now enforces hosted secret/database/HTTPS requirements and
+rejects `MPESA_ENV=production`, both at factory startup and in the provider
+client (including reconciliation workers). Four focused staging-configuration
+tests pass. Set `APP_ENV=staging`, `MPESA_ENV=sandbox` on future staging services.
+Resource isolation still requires an independently created database and explicit
+verification of its host/database/role before injecting `DATABASE_URL`; the
+application cannot infer database ownership from a connection string.
+
+The frontend's ten browser tests and HTTPS-origin production compilation passed
+again. The browser tests mock the API and the compilation uses an invalid test
+origin; neither verifies an actual deployed service. In-app notifications write
+only to the configured database inbox; no external customer messaging sender was
+found in this notification path.
+
+Outstanding: Chrome access approval timed out and browser access is unavailable;
+the Render plugin is not installed/connected. No hosted staging resource was
+created and no costs incurred. Hosted staging, matching CORS/cookies, actual
+sandbox credentials/test phone/public callback, provider behavior, Linux startup,
+backend logs and real frontend/backend workflows remain blocked by access and
+configuration. No actual Daraja request was sent. Credentials must be supplied
+through protected staging settings, never Git or chat.
+
+After those gates pass, obtain explicit production release approval. Preserve
+the current release IDs, verify a restorable production backup, and obtain
+separate authorization to run `python migrate_financial_admin.py` from `backend`
+against the verified production target. Validate the schema before application
+traffic uses it. Coordinate the existing main-triggered deployments so the
+backend is healthy before publishing the frontend. The final Render start
+command should omit `init_db.py`, but changing production settings is still
+unapproved. Run the full suite with isolated PostgreSQL enabled, verify the
+latest remote main is still an ancestor, then use a fast-forward-only merge.
+
+Rollback: retain additive tables and financial/audit records; suspend new payment
+initiation if needed, preserve callbacks and unresolved attempts, and use a
+reviewed compatible prior release. Do not blindly roll back to the known older
+payment behavior. Database restoration requires separate incident approval and
+provider reconciliation because it can discard legitimate intervening writes.

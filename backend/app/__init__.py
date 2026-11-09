@@ -46,7 +46,10 @@ def create_app(test_config=None):
     if test_config is not None:
         app.config.update(test_config)
 
-    if app.config['APP_ENV'] == 'production' and not app.config.get('TESTING'):
+    if app.config['APP_ENV'] == 'staging' and os.environ.get('MPESA_ENV', 'sandbox').strip().lower() != 'sandbox':
+        raise RuntimeError('Staging requires MPESA_ENV=sandbox')
+
+    if app.config['APP_ENV'] in ('production', 'staging') and not app.config.get('TESTING'):
         if not app.config.get('DATABASE_URL') or not os.environ.get('SECRET_KEY'):
             raise RuntimeError('Production requires DATABASE_URL and a stable SECRET_KEY')
         if not https_enabled or not app.config['FRONTEND_URL'].startswith('https://'):

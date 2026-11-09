@@ -4,6 +4,7 @@ Set PGTEST_DATABASE_URL securely and PGTEST_CONFIRM_ISOLATED=1. Never use produc
 Each test creates/drops only its own random kikwetu_test_* schema.
 """
 import os
+import sqlite3
 import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -62,6 +63,7 @@ class PostgresSafetyTests(unittest.TestCase):
     callback=regression.PaymentSafetyTests.callback
     cash=regression.PaymentSafetyTests.cash
     summary=regression.PaymentSafetyTests.summary
+    initiation=regression.PaymentSafetyTests.initiation
 
     def sql(self,statement,args=()):
         with self.app.app_context():
@@ -74,11 +76,29 @@ class PostgresSafetyTests(unittest.TestCase):
     test_migration_preserves_rows_and_repeats=regression.PaymentSafetyTests.test_migration_preserves_rows_and_repeats
     test_cash_vs_callback_concurrency_preserves_success=regression.PaymentSafetyTests.test_cash_vs_callback_concurrency_preserves_success
     test_duplicate_callbacks_count_once_even_concurrently=regression.PaymentSafetyTests.test_duplicate_callbacks_count_once_even_concurrently
+    test_partial_payment_only_charges_remaining_balance=regression.PaymentSafetyTests.test_partial_payment_only_charges_remaining_balance
+    test_idempotency_retry_does_not_initiate_twice=regression.PaymentSafetyTests.test_idempotency_retry_does_not_initiate_twice
+    test_missed_callback_recovers_via_provider_query_without_invented_receipt=regression.PaymentSafetyTests.test_missed_callback_recovers_via_provider_query_without_invented_receipt
+    test_callback_outage_is_durable_and_worker_retries=regression.PaymentSafetyTests.test_callback_outage_is_durable_and_worker_retries
+    test_receipt_conflict_is_not_silently_acknowledged=regression.PaymentSafetyTests.test_receipt_conflict_is_not_silently_acknowledged
 
     def test_migration_rejects_column_drift(self):
         self.sql('ALTER TABLE farm_expenses DROP COLUMN quantity')
         with self.assertRaisesRegex(SchemaMismatch,'quantity'):
             migrate(self.app)
+
+    def test_payment_constraints_reject_invalid_or_duplicate_active_attempts(self):
+        insert = '''INSERT INTO payment_attempts(
+            attempt_id,request_key,order_id,customer_id,amount,phone_number,state)
+            VALUES (?,?,?,1,?,'254712345678','reserved')'''
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.sql(insert, ('invalid-amount','key-invalid-amount',1,-1))
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.sql(insert, ('missing-order','key-missing-order',999999,200))
+        self.sql(insert, ('first-attempt','key-first-attempt',1,200))
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.sql(insert, ('duplicate-active','key-duplicate-active',1,200))
+        self.assertEqual(self.sql('SELECT COUNT(*) AS n FROM payment_attempts')[0]['n'],1)
 
     def test_failed_migration_rolls_back_all_new_tables(self):
         # Build a legacy-only isolated fixture, then inject a mid-DDL failure.

@@ -43,6 +43,8 @@ def normalize_kenyan_phone(phone_number):
 
 def _settings():
     environment = os.environ.get("MPESA_ENV", "sandbox").strip().lower()
+    if os.environ.get('APP_ENV', '').strip().lower() == 'staging' and environment != 'sandbox':
+        raise MpesaConfigurationError('Staging requires the M-Pesa sandbox')
     if environment not in ('sandbox', 'production'):
         raise MpesaConfigurationError("MPESA_ENV must be sandbox or production")
 
