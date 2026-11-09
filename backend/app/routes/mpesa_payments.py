@@ -1,263 +1,123 @@
-"""Customer M-Pesa STK Push initiation, status, and Daraja callback routes."""
-
+"""Customer payment intents, status recovery and durable Daraja callbacks."""
 import sqlite3
-
-from flask import Blueprint, current_app, jsonify, request, session
-
+import uuid
+from flask import Blueprint, jsonify, request, session
 from ..auth import customer_required
 from ..db import get_db
 from ..services import mpesa
+from ..services.payment_records import outstanding, has_open_attempt
+from ..services.payment_reconciliation import retain_callback, reconcile
+
+mpesa_payments_bp = Blueprint('mpesa_payments', __name__, url_prefix='/api/payments/mpesa')
 
 
-mpesa_payments_bp = Blueprint("mpesa_payments", __name__, url_prefix="/api/payments/mpesa")
-
-
-def _metadata_items(callback):
-    items = callback.get("CallbackMetadata", {}).get("Item", [])
-    if not isinstance(items, list):
-        return {}
-    return {
-        item.get("Name"): item.get("Value")
-        for item in items
-        if isinstance(item, dict) and item.get("Name")
-    }
-
-
-@mpesa_payments_bp.post("/stk-push")
+@mpesa_payments_bp.post('/stk-push')
 @customer_required
 def stk_push():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
-        return jsonify({"error": "Request body must contain valid JSON"}), 400
-    order_id = data.get("order_id")
+        return jsonify(error='Request body must contain valid JSON'), 400
+    order_id = data.get('order_id')
     if not isinstance(order_id, int) or isinstance(order_id, bool) or order_id <= 0:
-        return jsonify({"error": "A valid order is required"}), 400
-
-    database = get_db()
+        return jsonify(error='A valid order is required'), 400
+    key = request.headers.get('Idempotency-Key') or data.get('request_key') or str(uuid.uuid4())
+    if not isinstance(key, str) or not 8 <= len(key) <= 128:
+        return jsonify(error='Invalid payment request key'), 400
+    key = f"{session['user_id']}:{key}"
+    db = get_db()
+    attempt_id = str(uuid.uuid4())
     try:
-        order = database.execute(
-            """SELECT orders.order_id, orders.order_number, orders.order_status,
-                      orders.payment_status, orders.total_amount,
-                      customers.phone_number
-               FROM orders
-               JOIN customers ON customers.customer_id = orders.customer_id
-               WHERE orders.order_id = ? AND orders.customer_id = ?""",
-            (order_id, session["user_id"]),
-        ).fetchone()
-        if order is None:
-            return jsonify({"error": "Order not found"}), 404
-        if order["payment_status"] == "paid":
-            return jsonify({"error": "This order has already been paid"}), 400
-        if order["order_status"] == "cancelled":
-            return jsonify({"error": "Cancelled orders cannot be paid"}), 400
-        if order["total_amount"] <= 0:
-            return jsonify({"error": "This order does not have a payable amount"}), 400
-
-        pending = database.execute(
-            """SELECT checkout_request_id FROM mpesa_transactions
-               WHERE order_id = ? AND status = 'pending'
-               ORDER BY transaction_id DESC LIMIT 1""",
-            (order_id,),
-        ).fetchone()
-        if pending is not None:
-            return jsonify({
-                "error": "An M-Pesa payment request is already pending for this order",
-                "checkout_request_id": pending["checkout_request_id"],
-            }), 409
-
-        current_app.logger.info("Starting M-Pesa STK Push for order %s", order["order_number"])
-        daraja = mpesa.initiate_stk_push(
-            phone_number=order["phone_number"],
-            amount=order["total_amount"],
-            order_number=order["order_number"],
-        )
-
-        database.begin()
-        current_order = database.execute(
-            """SELECT order_status, payment_status FROM orders
-               WHERE order_id = ? AND customer_id = ?""",
-            (order_id, session["user_id"]),
-        ).fetchone()
-        if current_order is None:
-            database.rollback()
-            return jsonify({"error": "Order not found"}), 404
-        if current_order["payment_status"] == "paid" or current_order["order_status"] == "cancelled":
-            database.rollback()
-            return jsonify({"error": "This order is no longer eligible for M-Pesa payment"}), 409
-
-        database.execute(
-            """INSERT INTO mpesa_transactions(
-                   order_id, customer_id, merchant_request_id,
-                   checkout_request_id, phone_number, amount, status
-               ) VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
-            (
-                order_id,
-                session["user_id"],
-                daraja["merchant_request_id"],
-                daraja["checkout_request_id"],
-                daraja["phone_number"],
-                order["total_amount"],
-            ),
-        )
-        database.execute(
-            """UPDATE orders
-               SET order_status = 'processing', payment_status = 'unpaid',
-                   payment_method = 'mpesa', paid_at = NULL,
-                   updated_at = CURRENT_TIMESTAMP
-               WHERE order_id = ? AND customer_id = ?""",
-            (order_id, session["user_id"]),
-        )
-        database.commit()
-        current_app.logger.info(
-            "M-Pesa STK Push accepted for order %s; checkout %s",
-            order["order_number"],
-            daraja["checkout_request_id"],
-        )
-        return jsonify({
-            "message": "M-Pesa payment request sent",
-            "checkout_request_id": daraja["checkout_request_id"],
-            "payment_status": "pending",
-        }), 202
-    except mpesa.MpesaConfigurationError as error:
-        current_app.logger.error("M-Pesa sandbox configuration error: %s", error)
-        return jsonify({"error": str(error)}), 503
+        db.begin()
+        order = db.execute('''SELECT orders.*,customers.phone_number FROM orders
+            JOIN customers ON customers.customer_id=orders.customer_id
+            WHERE orders.order_id=? AND orders.customer_id=?''' + (' FOR UPDATE OF orders' if db.postgres else ''),
+            (order_id, session['user_id'])).fetchone()
+        if not order:
+            return jsonify(error='Order not found'), 404
+        prior = db.execute('SELECT * FROM payment_attempts WHERE request_key=?', (key,)).fetchone()
+        if prior:
+            if prior['order_id'] != order_id:
+                return jsonify(error='Payment key already used for a different order'), 409
+            return jsonify(attempt_id=prior['attempt_id'],checkout_request_id=prior['checkout_request_id'],
+                           payment_status=prior['state'],message='Existing payment attempt; no new prompt sent'), 200
+        if order['order_status'] == 'cancelled' or order['payment_status'] == 'paid':
+            return jsonify(error='Paid or cancelled orders cannot be paid again'), 400
+        amount = outstanding(db, order)
+        if amount <= 0 or amount != amount.to_integral_value():
+            return jsonify(error='M-Pesa requires a positive whole-shilling outstanding balance'), 400
+        if has_open_attempt(db, order_id):
+            row = db.execute("SELECT checkout_request_id FROM mpesa_transactions WHERE order_id=? AND status='pending' ORDER BY transaction_id DESC LIMIT 1", (order_id,)).fetchone()
+            return jsonify(error='An M-Pesa request is unresolved; do not retry payment',checkout_request_id=row['checkout_request_id'] if row else None), 409
+        phone = mpesa.normalize_kenyan_phone(order['phone_number'])
+        db.execute('''INSERT INTO payment_attempts(attempt_id,request_key,order_id,customer_id,amount,phone_number,state)
+                      VALUES (?,?,?,?,?,?,'reserved')''', (attempt_id,key,order_id,session['user_id'],str(amount),phone))
+        db.commit()
+        try:
+            response = mpesa.initiate_stk_push(phone_number=order['phone_number'],amount=int(amount),order_number=order['order_number'])
+        except (mpesa.MpesaConfigurationError, mpesa.MpesaRejectedError) as error:
+            db.execute("UPDATE payment_attempts SET state='rejected',issue=?,updated_at=CURRENT_TIMESTAMP WHERE attempt_id=?", (str(error),attempt_id))
+            db.commit()
+            return jsonify(error=str(error),attempt_id=attempt_id), 503
+        except mpesa.MpesaError:
+            db.execute("UPDATE payment_attempts SET state='unknown',issue='Initiation outcome unknown; reconcile before retry',updated_at=CURRENT_TIMESTAMP WHERE attempt_id=?", (attempt_id,))
+            db.commit()
+            return jsonify(error='Payment outcome is unknown. Do not send another payment; contact support.',attempt_id=attempt_id), 502
+        db.begin()
+        db.execute('SELECT order_id FROM orders WHERE order_id=?' + (' FOR UPDATE' if db.postgres else ''), (order_id,)).fetchone()
+        db.execute('''INSERT INTO mpesa_transactions(order_id,customer_id,merchant_request_id,checkout_request_id,phone_number,amount)
+                      VALUES (?,?,?,?,?,?)''', (order_id,session['user_id'],response['merchant_request_id'],response['checkout_request_id'],phone,int(amount)))
+        db.execute("UPDATE payment_attempts SET state='pending',checkout_request_id=?,updated_at=CURRENT_TIMESTAMP WHERE attempt_id=?", (response['checkout_request_id'],attempt_id))
+        db.execute("""UPDATE orders SET order_status='processing',payment_method='mpesa',updated_at=CURRENT_TIMESTAMP
+                      WHERE order_id=? AND payment_status='unpaid' AND order_status<>'cancelled' """, (order_id,))
+        db.commit()
+        events = db.execute('SELECT event_id FROM payment_callback_inbox WHERE checkout_request_id=? AND processed_at IS NULL', (response['checkout_request_id'],)).fetchall()
+        db.commit()
+        for event in events:
+            reconcile(db,response['checkout_request_id'],event['event_id'])
+        return jsonify(message='M-Pesa payment request sent',attempt_id=attempt_id,
+                       checkout_request_id=response['checkout_request_id'],payment_status='pending'), 202
     except mpesa.MpesaError as error:
-        current_app.logger.warning("M-Pesa STK Push failed for order %s", order_id)
-        return jsonify({"error": str(error)}), 502
-    except sqlite3.IntegrityError:
-        database.rollback()
-        return jsonify({"error": "The M-Pesa payment request could not be saved"}), 409
+        db.rollback()
+        return jsonify(error=str(error)), 400
     except sqlite3.Error:
-        database.rollback()
-        return jsonify({"error": "The payment request could not be completed"}), 500
+        db.rollback()
+        return jsonify(error='Payment could not be saved; reconcile before retry',attempt_id=attempt_id), 503
+    finally:
+        db.rollback()
 
 
-@mpesa_payments_bp.get("/status/<checkout_request_id>")
+@mpesa_payments_bp.get('/status/<checkout_request_id>')
 @customer_required
 def payment_status(checkout_request_id):
-    try:
-        transaction = get_db().execute(
-            """SELECT mpesa_transactions.checkout_request_id,
-                      mpesa_transactions.status,
-                      mpesa_transactions.amount,
-                      mpesa_transactions.mpesa_receipt_number,
-                      mpesa_transactions.result_description,
-                      orders.order_id, orders.order_number,
-                      orders.payment_status, orders.payment_method, orders.paid_at
-               FROM mpesa_transactions
-               JOIN orders ON orders.order_id = mpesa_transactions.order_id
-               WHERE mpesa_transactions.checkout_request_id = ?
-                 AND mpesa_transactions.customer_id = ?""",
-            (checkout_request_id, session["user_id"]),
-        ).fetchone()
-        if transaction is None:
-            return jsonify({"error": "Payment request not found"}), 404
-        return jsonify(dict(transaction)), 200
-    except sqlite3.Error:
-        return jsonify({"error": "Payment status could not be loaded"}), 500
+    db = get_db()
+    tx = db.execute('SELECT * FROM mpesa_transactions WHERE checkout_request_id=? AND customer_id=?', (checkout_request_id,session['user_id'])).fetchone()
+    if not tx:
+        return jsonify(error='Payment request not found'), 404
+    db.commit()
+    if tx['status'] == 'pending':
+        reconcile(db,checkout_request_id)
+    row = db.execute('''SELECT mt.checkout_request_id,mt.status,mt.amount,mt.mpesa_receipt_number,
+                       mt.result_description,o.order_id,o.order_number,o.payment_status,o.payment_method,o.paid_at,
+                       pv.issue AS reconciliation_issue,pv.timestamp_source
+                       FROM mpesa_transactions mt JOIN orders o ON o.order_id=mt.order_id
+                       LEFT JOIN payment_verifications pv ON pv.transaction_id=mt.transaction_id
+                       WHERE mt.checkout_request_id=?''', (checkout_request_id,)).fetchone()
+    return jsonify(dict(row)), 200
 
 
-@mpesa_payments_bp.post("/callback")
+@mpesa_payments_bp.post('/callback')
 def callback():
-    """Receive the public Daraja callback and apply it exactly once."""
+    if request.content_length and request.content_length > 32768:
+        return jsonify(ResultCode=1,ResultDesc='Callback too large'), 413
     data = request.get_json(silent=True)
-    callback_data = data.get("Body", {}).get("stkCallback") if isinstance(data, dict) else None
-    if not isinstance(callback_data, dict):
-        return jsonify({"ResultCode": 1, "ResultDesc": "Invalid callback"}), 400
-
-    checkout_request_id = callback_data.get("CheckoutRequestID")
-    result_code = str(callback_data.get("ResultCode", ""))
-    result_description = str(callback_data.get("ResultDesc", ""))[:500]
-    if not checkout_request_id:
-        return jsonify({"ResultCode": 1, "ResultDesc": "CheckoutRequestID is required"}), 400
-
-    current_app.logger.info("M-Pesa callback received for checkout %s", checkout_request_id)
-    database = get_db()
-    try:
-        database.begin()
-        transaction = database.execute(
-            """SELECT transaction_id, order_id, amount, status
-               FROM mpesa_transactions WHERE checkout_request_id = ?""",
-            (checkout_request_id,),
-        ).fetchone()
-        if transaction is None:
-            database.rollback()
-            current_app.logger.warning("M-Pesa callback has no matching local transaction")
-            return jsonify({"ResultCode": 0, "ResultDesc": "Callback acknowledged"}), 200
-        if transaction["status"] == "successful":
-            database.rollback()
-            return jsonify({"ResultCode": 0, "ResultDesc": "Callback already processed"}), 200
-
-        metadata = _metadata_items(callback_data)
-        receipt = metadata.get("MpesaReceiptNumber")
-        callback_amount = metadata.get("Amount")
-        is_success = result_code == "0"
-        amount_matches = False
-        if is_success:
-            try:
-                amount_matches = float(callback_amount) == float(transaction["amount"])
-            except (TypeError, ValueError):
-                amount_matches = False
-
-        order = database.execute(
-            "SELECT order_status, payment_status, payment_method FROM orders WHERE order_id = ?",
-            (transaction["order_id"],),
-        ).fetchone()
-        can_apply_success = (
-            is_success
-            and amount_matches
-            and bool(receipt)
-            and order is not None
-            and order["order_status"] != "cancelled"
-            and (order["payment_status"] == "unpaid" or order["payment_method"] == "mpesa")
-        )
-
-        if can_apply_success:
-            database.execute(
-                """UPDATE mpesa_transactions
-                   SET status = 'successful', result_code = ?, result_description = ?,
-                       mpesa_receipt_number = ?, completed_at = CURRENT_TIMESTAMP,
-                       updated_at = CURRENT_TIMESTAMP
-                   WHERE transaction_id = ?""",
-                (result_code, result_description, str(receipt), transaction["transaction_id"]),
-            )
-            database.execute(
-                """UPDATE orders SET payment_status = 'paid', payment_method = 'mpesa',
-                          order_status = 'completed',
-                          paid_at = COALESCE(paid_at, CURRENT_TIMESTAMP),
-                          updated_at = CURRENT_TIMESTAMP
-                   WHERE order_id = ?""",
-                (transaction["order_id"],),
-            )
-            current_app.logger.info("M-Pesa payment completed for checkout %s", checkout_request_id)
-        else:
-            status = "cancelled" if result_code == "1032" else "failed"
-            safe_description = result_description
-            if is_success and not amount_matches:
-                safe_description = "Callback amount did not match the order total"
-            elif is_success and not receipt:
-                safe_description = "Successful callback did not include a receipt"
-            elif is_success and order is not None and order["order_status"] == "cancelled":
-                safe_description = "Order was cancelled before payment confirmation"
-            elif is_success and order is not None and order["payment_status"] == "paid":
-                safe_description = "Order was already paid using another method"
-            database.execute(
-                """UPDATE mpesa_transactions
-                   SET status = ?, result_code = ?, result_description = ?,
-                       completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-                   WHERE transaction_id = ?""",
-                (status, result_code, safe_description[:500], transaction["transaction_id"]),
-            )
-            current_app.logger.warning(
-                "M-Pesa payment ended with status %s for checkout %s", status, checkout_request_id
-            )
-        database.commit()
-        return jsonify({"ResultCode": 0, "ResultDesc": "Callback processed"}), 200
-    except sqlite3.IntegrityError:
-        database.rollback()
-        current_app.logger.warning("Duplicate M-Pesa receipt or callback ignored")
-        return jsonify({"ResultCode": 0, "ResultDesc": "Callback already processed"}), 200
-    except sqlite3.Error:
-        database.rollback()
-        current_app.logger.exception("Database error while processing M-Pesa callback")
-        return jsonify({"ResultCode": 1, "ResultDesc": "Callback could not be processed"}), 500
+    body = data.get('Body') if isinstance(data, dict) else None
+    payload = body.get('stkCallback') if isinstance(body, dict) else None
+    if not isinstance(payload, dict):
+        return jsonify(ResultCode=1,ResultDesc='Invalid callback'), 400
+    checkout = payload.get('CheckoutRequestID')
+    if not isinstance(checkout,str) or not 1 <= len(checkout) <= 200 or not str(payload.get('ResultCode','')).isdigit():
+        return jsonify(ResultCode=1,ResultDesc='Invalid checkout or result'), 400
+    db = get_db()
+    event_id = retain_callback(db,payload)
+    message,status = reconcile(db,checkout,event_id)
+    return jsonify(ResultCode=0 if status in (200,202) else 1,ResultDesc=message), status

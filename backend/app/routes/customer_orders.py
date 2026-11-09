@@ -7,6 +7,7 @@ from flask import Blueprint, jsonify, request, session
 
 from ..auth import customer_required
 from ..db import get_db
+from .notifications import notify
 
 
 customer_orders_bp = Blueprint("customer_orders", __name__, url_prefix="/api/customer-orders")
@@ -73,6 +74,7 @@ def place_customer_order():
             }), 400
         database.execute("UPDATE orders SET total_amount = (SELECT COALESCE(SUM(line_total), 0) FROM order_items WHERE order_id = ?), updated_at = CURRENT_TIMESTAMP WHERE order_id = ?", (order_id, order_id))
         final_order = database.execute("SELECT order_id, order_number, order_status, total_amount FROM orders WHERE order_id = ?", (order_id,)).fetchone()
+        notify(database, f"order:{order_id}", "New Order Received", f"{order_number} worth KES {line_total}", order_id)
         database.commit()
         return jsonify({
             "message": "Order placed successfully",

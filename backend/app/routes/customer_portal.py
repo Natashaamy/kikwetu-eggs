@@ -5,6 +5,8 @@ import sqlite3
 from flask import Blueprint, jsonify, request, session
 
 from ..auth import customer_required
+from .notifications import notify
+from ..services.payment_records import has_open_attempt, net_received, outstanding, totals
 from ..db import get_db, is_postgres, item_summary_expression
 
 
@@ -12,7 +14,7 @@ customer_portal_bp = Blueprint("customer_portal", __name__, url_prefix="/api/cus
 
 
 def order_rows(database, customer_id):
-    return database.execute(
+    rows = database.execute(
         f"""
         SELECT orders.order_id, orders.order_number, orders.order_status,
                orders.payment_status, orders.payment_method, orders.paid_at,
@@ -31,12 +33,22 @@ def order_rows(database, customer_id):
         FROM orders
         LEFT JOIN order_items ON order_items.order_id = orders.order_id
         LEFT JOIN products ON products.product_id = order_items.product_id
-        WHERE orders.customer_id = ?
+        WHERE orders.customer_id = ? AND orders.order_status != 'cancelled'
         GROUP BY orders.order_id
         ORDER BY orders.created_at DESC, orders.order_id DESC
         """,
         (customer_id,),
     ).fetchall()
+
+    result=[]
+    for row in rows:
+        item=dict(row)
+        item['outstanding_amount']=str(outstanding(database,item))
+        item['has_payment_receipts']=net_received(database,item['order_id']) > 0
+        attempt=database.execute("SELECT state FROM payment_attempts WHERE order_id=? AND state IN ('reserved','unknown','pending')",(item['order_id'],)).fetchone()
+        item['payment_attempt_state']=attempt['state'] if attempt else None
+        result.append(item)
+    return result
 
 
 @customer_portal_bp.get("/dashboard")
@@ -56,6 +68,10 @@ def customer_dashboard():
                FROM orders WHERE customer_id = ?""",
             (customer_id,),
         ).fetchone()
+        summary = dict(summary)
+        cash_totals,_=totals(database,database.execute('SELECT * FROM orders WHERE customer_id=?',(customer_id,)).fetchall())
+        summary['amount_outstanding']=cash_totals['outstanding_amount']
+        summary['unpaid_orders']=cash_totals['unpaid_orders']
         orders = [dict(row) for row in order_rows(database, customer_id)]
         return jsonify({**dict(summary), "recent_orders": orders[:5]}), 200
     except sqlite3.Error:
@@ -109,12 +125,9 @@ def customer_order_detail(order_id):
         if not rows:
             return jsonify({"error": "Order not found"}), 404
         order = dict(rows[0])
-        pending_mpesa = database.execute(
-            "SELECT 1 FROM mpesa_transactions WHERE order_id = ? AND status = 'pending'",
-            (order_id,),
-        ).fetchone() is not None
+        pending_mpesa = has_open_attempt(database,order_id)
         state_error = _edit_state_error(order)
-        order["can_edit"] = state_error is None and not pending_mpesa and len(rows) == 1
+        order["can_edit"] = state_error is None and not pending_mpesa and net_received(database,order_id) <= 0 and len(rows) == 1
         order["edit_block_reason"] = (
             "This order cannot be edited while an M-Pesa payment is pending."
             if pending_mpesa else state_error
@@ -150,14 +163,14 @@ def edit_customer_order(order_id):
         if state_error:
             database.rollback()
             return jsonify({"error": state_error}), 400
-        if database.execute(
-            "SELECT 1 FROM mpesa_transactions WHERE order_id = ? AND status = 'pending'",
-            (order_id,),
-        ).fetchone():
+        if has_open_attempt(database, order_id):
             database.rollback()
             return jsonify({
                 "error": "This order cannot be edited while an M-Pesa payment is pending."
             }), 409
+        if net_received(database, order_id) > 0:
+            database.rollback()
+            return jsonify(error='Partially paid orders cannot be edited'), 409
         if len(rows) != 1:
             database.rollback()
             return jsonify({"error": "Orders with multiple items cannot be edited here"}), 409
@@ -260,7 +273,7 @@ def select_customer_payment_method(order_id):
         database.begin()
         order = database.execute(
             """SELECT order_status, payment_status, payment_method
-               FROM orders WHERE order_id = ? AND customer_id = ?""",
+               FROM orders WHERE order_id = ? AND customer_id = ?""" + (" FOR UPDATE" if is_postgres() else ""),
             (order_id, session["user_id"]),
         ).fetchone()
         if order is None:
@@ -275,10 +288,7 @@ def select_customer_payment_method(order_id):
         if order["payment_method"] == "cash":
             database.rollback()
             return jsonify({"error": "Cash payment has already been selected"}), 400
-        if database.execute(
-            "SELECT 1 FROM mpesa_transactions WHERE order_id = ? AND status = 'pending'",
-            (order_id,),
-        ).fetchone():
+        if has_open_attempt(database, order_id):
             database.rollback()
             return jsonify({"error": "An M-Pesa payment request is still pending"}), 409
 
@@ -287,7 +297,7 @@ def select_customer_payment_method(order_id):
                SET order_status = 'processing', payment_status = 'unpaid',
                    payment_method = 'cash', paid_at = NULL,
                    updated_at = CURRENT_TIMESTAMP
-               WHERE order_id = ? AND customer_id = ?""",
+               WHERE order_id = ? AND customer_id = ? AND payment_status = 'unpaid'""",
             (order_id, session["user_id"]),
         )
         updated = database.execute(
@@ -315,14 +325,14 @@ def cancel_customer_order(order_id):
     database = get_db()
     try:
         database.begin()
-        order = database.execute("SELECT order_status, payment_status FROM orders WHERE order_id = ? AND customer_id = ?", (order_id, session["user_id"])).fetchone()
+        order = database.execute("SELECT order_status, payment_status FROM orders WHERE order_id = ? AND customer_id = ?" + (" FOR UPDATE" if is_postgres() else ""), (order_id, session["user_id"])).fetchone()
         if order is None:
             database.rollback()
             return jsonify({"error": "Order not found"}), 404
         if order["order_status"] == "completed":
             database.rollback()
             return jsonify({"error": "Completed orders cannot be cancelled"}), 400
-        if order["payment_status"] == "paid":
+        if order["payment_status"] == "paid" or net_received(database, order_id) > 0:
             database.rollback()
             return jsonify({"error": "This order has already been paid. Please contact the administrator for cancellation."}), 400
         if order["order_status"] == "cancelled":
@@ -331,10 +341,7 @@ def cancel_customer_order(order_id):
         if order["order_status"] not in {"pending", "processing"}:
             database.rollback()
             return jsonify({"error": "Only unpaid orders can be cancelled"}), 400
-        if database.execute(
-            "SELECT 1 FROM mpesa_transactions WHERE order_id = ? AND status = 'pending'",
-            (order_id,),
-        ).fetchone():
+        if has_open_attempt(database, order_id):
             database.rollback()
             return jsonify({"error": "Please wait for the pending M-Pesa request to finish before cancelling this order"}), 409
         database.execute(
@@ -350,6 +357,7 @@ def cancel_customer_order(order_id):
             (order_id, order_id),
         )
         database.execute("UPDATE orders SET order_status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE order_id = ? AND customer_id = ?", (order_id, session["user_id"]))
+        notify(database, f"cancel:{order_id}", "Order Cancelled", f"Order #{order_id}", order_id)
         database.commit()
         return jsonify({"message": "Order cancelled successfully", "order_id": order_id, "order_status": "cancelled"}), 200
     except sqlite3.Error:

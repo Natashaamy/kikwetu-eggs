@@ -2,9 +2,11 @@
 
 import sqlite3
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, session
+from ..business_time import utc_now
+from ..services.payment_records import money, outstanding, net_received, has_open_attempt, sync_order
 
-from ..db import get_db, item_summary_expression
+from ..db import get_db, item_summary_expression, is_postgres
 from ..auth import admin_required
 
 
@@ -137,62 +139,72 @@ def get_order(order_id):
 
 @orders_bp.patch("/<int:order_id>/payment")
 def record_order_payment(order_id):
-    """Record a manual payment and complete confirmed cash orders."""
+    """Record only the remaining balance, or an explicit partial receipt."""
     data = request.get_json(silent=True)
-    if not isinstance(data, dict):
-        return jsonify({"error": "Request body must contain valid JSON"}), 400
+    if not isinstance(data, dict) or data.get('payment_status') != 'paid':
+        return jsonify(error='payment_status must be paid'), 400
+    method = data.get('payment_method')
+    if method not in ('cash','bank_transfer'):
+        return jsonify(error='Manual payments must use cash or bank transfer'), 400
+    return _record_event(order_id, data, 'receipt', method)
 
-    payment_status = data.get("payment_status")
-    payment_method = data.get("payment_method")
-    if payment_status != "paid":
-        return jsonify({"error": "payment_status must be paid"}), 400
-    if payment_method not in {"cash", "bank_transfer"}:
-        return jsonify({"error": "Manual payments must use cash or bank transfer"}), 400
 
-    database = get_db()
+@orders_bp.post('/<int:order_id>/refunds')
+def record_refund(order_id):
+    """Record an already completed refund; never initiate provider money movement."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or data.get('payment_method') not in ('cash','bank_transfer','mpesa'):
+        return jsonify(error='A valid refund payment method is required'), 400
+    if not data.get('reference') or not data.get('idempotency_key') or 'amount' not in data:
+        return jsonify(error='Refund amount, reference and idempotency_key are required'), 400
+    return _record_event(order_id, data, 'refund', data['payment_method'])
+
+
+def _record_event(order_id, data, kind, method):
+    db = get_db()
     try:
-        database.begin()
-        order = database.execute(
-            "SELECT order_id, order_status, payment_status FROM orders WHERE order_id = ?",
-            (order_id,),
-        ).fetchone()
-        if order is None:
-            database.rollback()
-            return jsonify({"error": "Order not found"}), 404
-        if order["payment_status"] == "paid":
-            database.rollback()
-            return jsonify({"error": "Payment has already been recorded for this order"}), 400
-        if order["order_status"] == "cancelled":
-            database.rollback()
-            return jsonify({"error": "Cancelled orders cannot be marked as paid"}), 400
-        if database.execute(
-            "SELECT 1 FROM mpesa_transactions WHERE order_id = ? AND status = 'pending'",
-            (order_id,),
-        ).fetchone():
-            database.rollback()
-            return jsonify({"error": "An M-Pesa payment request is still pending for this order"}), 409
-
-        database.execute(
-            """UPDATE orders SET
-                      order_status = CASE WHEN ? = 'cash' THEN 'completed' ELSE order_status END,
-                      payment_status = 'paid', payment_method = ?,
-                      paid_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-               WHERE order_id = ?""",
-            (payment_method, payment_method, order_id),
-        )
-        payment = database.execute(
-            """SELECT order_id, order_status, payment_status, payment_method, paid_at
-               FROM orders WHERE order_id = ?""",
-            (order_id,),
-        ).fetchone()
-        database.commit()
-        return jsonify({"message": "Payment recorded successfully", **dict(payment)}), 200
+        db.begin()
+        order = db.execute('SELECT * FROM orders WHERE order_id=?' + (' FOR UPDATE' if is_postgres() else ''), (order_id,)).fetchone()
+        if not order:
+            return jsonify(error='Order not found'), 404
+        key = data.get('idempotency_key') or f'complete:{order_id}'
+        if not isinstance(key,str) or not 1 <= len(key) <= 128:
+            return jsonify(error='Invalid idempotency key'), 400
+        key = kind + ':' + key
+        prior = db.execute('SELECT * FROM payment_events WHERE idempotency_key=?', (key,)).fetchone()
+        if prior:
+            if kind == 'receipt' and not data.get('idempotency_key') and order['payment_status'] != 'paid':
+                return jsonify(error='A new receipt after a refund requires a new idempotency_key'), 409
+            if prior['order_id'] != order_id or prior['method'] != method or ('amount' in data and money(data['amount']) != money(prior['amount'])) or str(data.get('reference','Manual confirmation')) != prior['reference']:
+                return jsonify(error='Idempotency key conflicts with an existing entry'), 409
+            return jsonify(message='Payment entry already recorded',event_id=prior['event_id']), 200
+        if kind == 'receipt' and (order['order_status'] == 'cancelled' or order['payment_status'] == 'paid'):
+            return jsonify(error='Paid or cancelled orders cannot receive manual payments'), 400
+        if has_open_attempt(db, order_id):
+            return jsonify(error='An M-Pesa payment request is still pending for this order'), 409
+        limit = outstanding(db, order) if kind == 'receipt' else net_received(db, order_id)
+        amount = money(data.get('amount',limit))
+        if amount <= 0 or amount > limit:
+            return jsonify(error='Amount exceeds the available balance or is zero'), 400
+        if 'amount' in data and not data.get('idempotency_key'):
+            return jsonify(error='Explicit amounts require an idempotency_key'), 400
+        now = utc_now().isoformat()
+        reference = str(data.get('reference','Manual confirmation'))
+        if len(reference) > 200:
+            return jsonify(error='Reference is too long'), 400
+        event = db.execute('''INSERT INTO payment_events(order_id,kind,amount,method,idempotency_key,reference,occurred_at,created_by)
+                           VALUES (?,?,?,?,?,?,?,?) RETURNING event_id''',
+                           (order_id,kind,str(amount),method,key,reference,now,session['user_id'])).fetchone()
+        sync_order(db,order,method,now,refund=kind == 'refund')
+        result = db.execute('SELECT order_id,order_status,payment_status,payment_method,paid_at FROM orders WHERE order_id=?',(order_id,)).fetchone()
+        db.commit()
+        return jsonify(message='Payment recorded successfully',event_id=event['event_id'],**dict(result)),200
+    except ValueError as error:
+        return jsonify(error=str(error)),400
     except sqlite3.IntegrityError:
-        database.rollback()
-        return jsonify({"error": "Payment could not be recorded"}), 400
-    except sqlite3.Error:
-        database.rollback()
-        return jsonify({"error": "A database error occurred while recording payment"}), 500
+        return jsonify(error='Payment entry conflicts with existing data'),409
+    finally:
+        db.rollback()
 
 
 @orders_bp.post("/<int:order_id>/items")
@@ -242,13 +254,16 @@ def create_order_item(order_id):
     try:
         database.begin()
         order = database.execute(
-            "SELECT order_id, order_status, payment_status FROM orders WHERE order_id = ?",
+            "SELECT order_id, order_status, payment_status FROM orders WHERE order_id = ?" + (" FOR UPDATE" if is_postgres() else ""),
             (order_id,),
         ).fetchone()
 
         if order is None:
             database.rollback()
             return jsonify({"error": "Order not found"}), 404
+        if has_open_attempt(database,order_id) or net_received(database,order_id)>0:
+            database.rollback()
+            return jsonify(error='Payment activity prevents item changes'),409
         if order["order_status"] != "pending":
             database.rollback()
             return jsonify({"error": "Items can only be added to pending orders"}), 400
@@ -339,39 +354,8 @@ def create_order_item(order_id):
 
 @orders_bp.delete("/<int:order_id>")
 def delete_order(order_id):
-    """Permanently delete one cancelled order."""
-    database = get_db()
-
-    try:
-        database.begin()
-        existing_order = database.execute(
-            "SELECT order_id, order_status, payment_status FROM orders WHERE order_id = ?",
-            (order_id,),
-        ).fetchone()
-
-        if existing_order is None:
-            database.rollback()
-            return jsonify({"error": "Order not found"}), 404
-
-        if existing_order["order_status"] != "cancelled":
-            return jsonify({"error": "Only cancelled orders can be deleted"}), 409
-
-        database.execute(
-            "DELETE FROM orders WHERE order_id = ?",
-            (order_id,),
-        )
-        database.commit()
-        return jsonify({"message": "Cancelled order deleted successfully"}), 200
-    except sqlite3.IntegrityError:
-        database.rollback()
-        return jsonify({
-            "error": "Order could not be deleted because it is referenced by other records"
-        }), 400
-    except sqlite3.Error:
-        database.rollback()
-        return jsonify({
-            "error": "A database error occurred while deleting the order"
-        }), 500
+    """Retain cancelled orders and payment history for reconciliation."""
+    return jsonify({"error": "Orders are retained for audit and cannot be deleted"}), 409
 
 
 @orders_bp.patch("/<int:order_id>")
@@ -381,6 +365,9 @@ def update_order(order_id):
 
     if data is None or not isinstance(data, dict):
         return jsonify({"error": "Request body must contain valid JSON"}), 400
+
+    if "total_amount" in data:
+        return jsonify({"error": "Order totals are calculated from saved order items"}), 400
 
     allowed_fields = {
         "customer_id",
@@ -430,8 +417,9 @@ def update_order(order_id):
     database = get_db()
 
     try:
+        database.begin()
         existing_order = database.execute(
-            "SELECT order_id, order_status, payment_status FROM orders WHERE order_id = ?",
+            "SELECT order_id, order_status, payment_status FROM orders WHERE order_id = ?" + (" FOR UPDATE" if is_postgres() else ""),
             (order_id,),
         ).fetchone()
 
@@ -441,15 +429,12 @@ def update_order(order_id):
         if "order_status" in provided_fields:
             current_status = existing_order["order_status"]
 
-            if order_status == "cancelled" and existing_order["payment_status"] == "paid":
+            if order_status == "cancelled" and (existing_order["payment_status"] == "paid" or net_received(database, order_id) > 0):
                 database.rollback()
                 return jsonify({
                     "error": "This order has already been paid. A refund process is required before cancellation."
                 }), 400
-            if order_status == "cancelled" and database.execute(
-                "SELECT 1 FROM mpesa_transactions WHERE order_id = ? AND status = 'pending'",
-                (order_id,),
-            ).fetchone():
+            if order_status == "cancelled" and has_open_attempt(database, order_id):
                 database.rollback()
                 return jsonify({
                     "error": "An M-Pesa payment request is still pending for this order"
@@ -562,8 +547,10 @@ def create_order():
     customer_id = data.get("customer_id")
     order_number = data.get("order_number")
     order_status = data.get("order_status")
-    total_amount = data.get("total_amount")
+    total_amount = 0
     notes = data.get("notes")
+    if data.get("total_amount", 0) != 0:
+        return jsonify({"error": "New orders start at zero; add server-priced order items"}), 400
 
     missing_fields = []
     if customer_id is None:

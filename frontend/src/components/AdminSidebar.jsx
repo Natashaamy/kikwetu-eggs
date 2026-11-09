@@ -4,7 +4,7 @@ import { useAuth } from "../context/AuthContext.jsx";
 function AdminSidebar({ onNavigate }) {
   const navigate = useNavigate();
   const { logout } = useAuth();
-  const links = [["/admin/dashboard", "Dashboard"], ["/admin/products", "Products"], ["/admin/orders", "Orders"], ["/admin/customers", "Customers"], ["/admin/reports", "Reports"]];
+  const links = [["/admin/dashboard", "Dashboard"], ["/admin/products", "Products"], ["/admin/orders", "Orders"], ["/admin/customers", "Customers"], ["/admin/reports", "Reports"], ["/admin/expenses", "Farm Expenses"]];
 
   async function handleLogout() {
     onNavigate();

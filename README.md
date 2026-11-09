@@ -43,10 +43,7 @@ flask --app app run --debug
 
 ## Render deployment
 
-Create a Render PostgreSQL database and a Python web service for this repository.
-Link the database to the web service so Render supplies `DATABASE_URL`. Set the
-service root directory to `ChickenBusinesssystem` when the repository contains
-the parent workspace folders shown here.
+For the existing Render/Netlify deployment, follow [the deployment checklist](docs/deployment-checklist.md) and [current readiness audit](docs/production-readiness-audit.md). Reuse the existing services and database. The Git root here contains `backend/` and `frontend/`; the local parent folder name is not a repository subdirectory. The commands below assume the Render root is the Git root.
 
 Use this build command:
 
@@ -57,21 +54,14 @@ pip install -r backend/requirements.txt
 Use this start command:
 
 ```text
-cd backend && python init_db.py && gunicorn --bind 0.0.0.0:$PORT "app:create_app()"
+cd backend && gunicorn --bind 0.0.0.0:$PORT "app:create_app()"
 ```
 
-Running `init_db.py` on every service start is safe: it uses
-`CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS`. It never drops
-tables and never seeds fake business data.
-
-The initializer also performs a small idempotent customer-account migration.
-On PostgreSQL it runs `ALTER TABLE customers ADD COLUMN IF NOT EXISTS` for the
-`is_active` flag. On SQLite it first checks `PRAGMA table_info(customers)` and
-adds the column only when missing. Existing customers receive the active
-default, and no customer or business-history rows are recreated or deleted.
+Run `python migrate_financial_admin.py` from `backend` as a separately reviewed release step after backup and PostgreSQL staging verification. Do not run the initializer on every service start: it also supports administrator bootstrap/password reset. Confirm older customer-account migrations were already applied; schema validation fails if a required structure is missing. See the checklist for recovery and rollback.
 
 Required Render variables:
 
+- `APP_ENV=production` — fail startup when required production configuration is absent.
 - `DATABASE_URL` — supplied by the linked Render PostgreSQL database.
 - `SECRET_KEY` — a long random value used to sign Flask sessions.
 - `FRONTEND_URL=https://YOUR-NETLIFY-SITE.netlify.app` — the exact Netlify
@@ -99,9 +89,10 @@ reset whenever the service restarts, and are not shared between multiple
 backend instances. Move to a shared limiter store before running more than one
 instance.
 
-M-Pesa sandbox variables, when payment testing is enabled:
+M-Pesa variables (keep sandbox until merchant/infrastructure verification passes):
 
-- `MPESA_ENV=sandbox`
+- `MPESA_ENV=sandbox` (`production` requires separate release approval)
+- `MPESA_TRANSACTION_TYPE=CustomerPayBillOnline` (or the verified merchant BuyGoods type)
 - `MPESA_CONSUMER_KEY`
 - `MPESA_CONSUMER_SECRET`
 - `MPESA_SHORTCODE`
@@ -131,13 +122,13 @@ available, temporarily set both of these Render environment variables:
 - `RESET_ADMIN_PASSWORD` — the new plain-text password, supplied only through
   Render's protected environment settings.
 
-On the next deployment or restart, `init_db.py` normalizes the username, finds
+During a separately authorized one-time recovery run, `init_db.py` normalizes the username, finds
 that administrator, hashes the new password with Werkzeug, and updates only the
 matching administrator's `password_hash`. It does not create an account when
 the username is unknown and never prints the password or hash. Wait for the
 safe `Admin password reset completed.` log message, verify login, and then
 remove both recovery variables immediately. Leaving them configured would
-reset the password again on every service start.
+reset the password again whenever the initializer is run.
 
 ## Local frontend
 
@@ -147,7 +138,9 @@ npm install
 npm run dev
 ```
 
-The Vite development proxy forwards `/api` requests to the local Flask server.
+Set `VITE_API_URL=http://127.0.0.1:5000` for local development. The API helper uses that origin; no Vite development proxy is configured. Netlify requires the existing backend HTTPS origin at build time (without `/api`). Production builds reject HTTP, localhost, URL credentials, paths and secret-like `VITE_*` variable names. Set the real HTTPS backend origin before running `npm run build`.
+
+`netlify.toml` sets base `frontend`, build `npm run build`, publish `dist`, Node 24 and the SPA fallback. Confirm the existing site's branch/context settings separately; this file does not select the production branch. See [the staging handoff](docs/github-deployment-handoff.md) for current verification and remaining hosting gates.
 
 ## Tests
 
@@ -156,3 +149,9 @@ Run backend tests from `backend/`:
 ```powershell
 python -m unittest discover -s tests -v
 ```
+
+## Payment recovery and staging verification
+
+Run `python reconcile_payments.py` from `backend` only against the approved environment. Schedule bounded batches and monitor unresolved intents; never retry an unknown payment solely because time elapsed.
+
+Five PostgreSQL integration tests are opt-in. Configure `PGTEST_DATABASE_URL` securely for an isolated database and set `PGTEST_CONFIRM_ISOLATED=1`; never point these at production. See [the safety correction report](docs/production-safety-corrections.md) for verified results and release gates.

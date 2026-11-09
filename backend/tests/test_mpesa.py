@@ -39,6 +39,9 @@ class MpesaTests(unittest.TestCase):
             database.commit()
         self.app = create_app({"TESTING": True, "DATABASE_URL": None, "DATABASE": self.database_path, "SECRET_KEY": "test"})
         self.client = self.app.test_client()
+        verifier = patch("app.routes.mpesa_payments.mpesa.query_stk_status", return_value="0")
+        self.verify_payment = verifier.start()
+        self.addCleanup(verifier.stop)
 
     def tearDown(self):
         self.temporary_directory.cleanup()
@@ -63,6 +66,44 @@ class MpesaTests(unittest.TestCase):
             self.assertEqual(normalize_kenyan_phone(value), "254712345678")
         with self.assertRaises(MpesaError):
             normalize_kenyan_phone("12345")
+
+    def seed_attempt(self):
+        with closing(sqlite3.connect(self.database_path)) as database:
+            database.execute("""INSERT INTO mpesa_transactions(order_id,customer_id,merchant_request_id,
+                checkout_request_id,phone_number,amount) VALUES (1,1,'merchant-1','checkout-1','254712345678',200)""")
+            database.commit()
+
+    def test_unverified_callback_cannot_pay_order(self):
+        self.seed_attempt()
+        self.verify_payment.return_value = '1032'
+        self.assertEqual(self.client.post('/api/payments/mpesa/callback',json=self.callback_payload()).status_code,409)
+        with closing(sqlite3.connect(self.database_path)) as db:
+            self.assertEqual(db.execute('SELECT payment_status FROM orders').fetchone()[0],'unpaid')
+            self.assertEqual(db.execute('SELECT status FROM mpesa_transactions').fetchone()[0],'pending')
+
+    def test_invalid_success_metadata_remains_pending_for_valid_retry(self):
+        self.seed_attempt()
+        payload=self.callback_payload()
+        payload['Body']['stkCallback']['CallbackMetadata']['Item'][0]['Value']=199
+        self.assertEqual(self.client.post('/api/payments/mpesa/callback',json=payload).status_code,400)
+        self.assertEqual(self.client.post('/api/payments/mpesa/callback',json=self.callback_payload()).status_code,200)
+
+    def test_late_paid_cancelled_order_retains_money_without_reopening(self):
+        self.seed_attempt()
+        with closing(sqlite3.connect(self.database_path)) as db:
+            db.execute("UPDATE orders SET order_status='cancelled'")
+            db.commit()
+        self.assertEqual(self.client.post('/api/payments/mpesa/callback',json=self.callback_payload()).status_code,200)
+        with closing(sqlite3.connect(self.database_path)) as db:
+            self.assertEqual(db.execute('SELECT order_status FROM orders').fetchone()[0],'cancelled')
+            self.assertEqual(db.execute('SELECT status FROM mpesa_transactions').fetchone()[0],'successful')
+
+    def test_verification_outage_and_malformed_callback(self):
+        self.seed_attempt()
+        self.verify_payment.side_effect=MpesaError('Unavailable')
+        self.assertEqual(self.client.post('/api/payments/mpesa/callback',json=self.callback_payload()).status_code,503)
+        for body in ({'Body':[]},{'Body':{'stkCallback':[]}},{}):
+            self.assertEqual(self.client.post('/api/payments/mpesa/callback',json=body).status_code,400)
 
     def test_stk_push_requires_customer_session(self):
         response = self.client.post("/api/payments/mpesa/stk-push", json={"order_id": 1})
@@ -129,6 +170,7 @@ class MpesaTests(unittest.TestCase):
         self.assertEqual(edit.get_json()["error"], "Completed orders cannot be edited")
 
     def test_failed_mpesa_callback_does_not_pay_or_complete_order(self):
+        self.verify_payment.return_value = "1032"
         with closing(sqlite3.connect(self.database_path)) as database:
             database.execute("UPDATE orders SET order_status = 'processing', payment_method = 'mpesa' WHERE order_id = 1")
             database.execute(

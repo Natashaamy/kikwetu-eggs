@@ -1,3 +1,4 @@
+import TemporaryMessage from "../components/TemporaryMessage.jsx";
 import { useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 
@@ -62,7 +63,7 @@ export default function AuthPage({ mode }) {
       {registering && <label>Phone Number<input name="phone_number" value={form.phone_number} onChange={handleChange} required autoComplete="tel" /></label>}
       <label>Password<input type="password" name="password" value={form.password} onChange={handleChange} required minLength="8" autoComplete={registering ? "new-password" : "current-password"} /></label>
       {registering && <label>Confirm Password<input type="password" name="confirm_password" value={form.confirm_password} onChange={handleChange} required minLength="8" autoComplete="new-password" /></label>}
-      {error && <p className="message error-message">{error}</p>}
+      {error && <TemporaryMessage className="message error-message">{error}</TemporaryMessage>}
       <button disabled={submitting}>{submitting ? "Please wait…" : registering ? "Register" : "Login"}</button>
     </form>
     <div className="auth-links">

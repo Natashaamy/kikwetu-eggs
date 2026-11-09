@@ -1,0 +1,40 @@
+{
+  "classification": "READY FOR STAGING VERIFICATION",
+  "date": "2026-11-09",
+  "backend": {
+    "discovered": 124,
+    "passed": 119,
+    "skipped_postgresql": 5,
+    "seconds": 53.816
+  },
+  "browser": {
+    "passed": 10,
+    "seconds": 41.3,
+    "api": "mocked"
+  },
+  "build": {
+    "passed": true,
+    "modules": 64,
+    "seconds": 1.61
+  },
+  "pip_check": "passed",
+  "diff_check": "passed",
+  "production_access": false,
+  "real_provider_calls": false,
+  "sha256": {
+    "backend/migrate_financial_admin.py": "e55a36e6fae723abcd93e8ed2b739e3181e01b82f457c2514339b98e832575d9",
+    "backend/schema.sql": "bbf307d5322eaf8f3087f54b97f9324ffe5182bd147f2342e0d5c43ad6d30be4",
+    "backend/schema_sqlite.sql": "99a5a676d7e9df0b1d3871cd27b4d258359dfb16c9bfda6ff14d310a92e33c0f",
+    "backend/app/schema_validation.py": "edf7c140517c097527d65746bed33d750636c73486b2bb3631c9335cbbbb3b08",
+    "backend/app/services/payment_records.py": "38661b2e83059c3fadb855289386ad7e28bb68a8d2e54a287c8c91ce8406232e",
+    "backend/app/services/payment_reconciliation.py": "4577d48d94fe7ca1faa7c782882e95117372a9d9ed2050c4b8f5acf1efd94b9e",
+    "backend/app/routes/mpesa_payments.py": "1f9cb2ce81ab3a4b20aca62829b545094747c79eae2d815b8cfd73d88721fdcd",
+    "backend/app/routes/orders.py": "e1d2c564111528a4b76ef34c62e00d4895a3826245b5410cc2d92d7da4919871",
+    "backend/migrations/000_legacy_schema.sql": "67ffec352c6b084bea5f49785028de96a856c5be6094a520e23ba1423e3e98f2",
+    "backend/migrations/000_legacy_schema_sqlite.sql": "00b2f737590dc1beee60690e0e60e1a1212d6ddf36ffeffbef776ba2f8b69d32",
+    "backend/migrations/001_financial_admin_schema.sql": "b51713c524faf5bc6b0ba3733cb2014cbe21c6f6a12e6647d81332eb36cf1287",
+    "backend/migrations/001_financial_admin_schema_sqlite.sql": "9a44d3f02ea99e82e606a19eae5f59c8ca6311a2742f0db2a37f169c783e1ca9",
+    "backend/migrations/002_payment_safety_schema.sql": "e807af4d25377376baa4199a5ab4419c7028e86003088fa03856d948a3d4b535",
+    "backend/migrations/002_payment_safety_schema_sqlite.sql": "e4b238d0b103237bbd790d5d63968bf6ce92b0b3a43d4462ab268243a97c1cc0"
+  }
+}

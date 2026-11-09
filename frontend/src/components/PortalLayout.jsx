@@ -1,3 +1,4 @@
+import AdminNotifications from "./AdminNotifications.jsx";
 import { useState } from "react";
 import { Outlet } from "react-router-dom";
 
@@ -15,7 +16,7 @@ function PortalLayout({ Sidebar, areaLabel }) {
       <Sidebar onNavigate={() => setMenuOpen(false)} />
     </aside>
     {menuOpen && <button className="sidebar-backdrop" aria-label="Close menu" onClick={() => setMenuOpen(false)} />}
-    <main className="portal-content"><Outlet /></main>
+    <main className="portal-content">{areaLabel.toLowerCase().includes("admin") && <AdminNotifications />}<Outlet /></main>
   </div>;
 }
 

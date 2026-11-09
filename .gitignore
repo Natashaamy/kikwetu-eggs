@@ -55,3 +55,7 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+.test-venv/
+
+frontend/test-results/
+frontend/playwright-report/

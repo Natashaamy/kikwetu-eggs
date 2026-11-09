@@ -1,14 +1,16 @@
 """Admin-only business reports and CSV export."""
 
 import csv
-from datetime import date
+from datetime import date, timedelta
 from io import StringIO
 import sqlite3
 
 from flask import Blueprint, Response, jsonify, request
 
 from ..auth import admin_required
-from ..db import get_db
+from ..services.payment_records import totals
+from ..db import get_db, is_postgres
+from ..business_time import utc_bounds, parse_timestamp, NAIROBI
 
 
 reports_bp = Blueprint("reports", __name__, url_prefix="/api/admin/reports")
@@ -45,11 +47,13 @@ def date_filter(alias="orders"):
     conditions = []
     parameters = []
     if from_date:
-        conditions.append(f"date({alias}.created_at) >= date(?)")
-        parameters.append(from_date)
+        conditions.append(f"{alias}.created_at >= ?")
+        value = utc_bounds(date.fromisoformat(from_date), date.fromisoformat(from_date))[0]
+        parameters.append(value.isoformat(sep=' ') if is_postgres() else value.replace(tzinfo=None).isoformat(sep=' '))
     if to_date:
-        conditions.append(f"date({alias}.created_at) <= date(?)")
-        parameters.append(to_date)
+        conditions.append(f"{alias}.created_at < ?")
+        value = utc_bounds(date.fromisoformat(to_date), date.fromisoformat(to_date))[1]
+        parameters.append(value.isoformat(sep=' ') if is_postgres() else value.replace(tzinfo=None).isoformat(sep=' '))
     return (" AND ".join(conditions) or "1 = 1"), parameters, from_date, to_date
 
 
@@ -159,12 +163,13 @@ def get_report():
             parameters,
         ).fetchall()
 
+        day_sql = "date(created_at AT TIME ZONE 'Africa/Nairobi')" if is_postgres() else "date(created_at, '+3 hours')"
         sales_over_time = database.execute(
-            f"""SELECT date(created_at) AS sale_date, COUNT(*) AS orders,
+            f"""SELECT {day_sql} AS sale_date, COUNT(*) AS orders,
                        COALESCE(SUM(total_amount), 0) AS revenue
                 FROM orders
                 WHERE order_status = 'completed' AND {period_sql}
-                GROUP BY date(created_at)
+                GROUP BY {day_sql}
                 ORDER BY sale_date""",
             parameters,
         ).fetchall()
@@ -181,6 +186,9 @@ def get_report():
             [*parameters, 20],
         ).fetchall()
 
+        summary = dict(summary)
+        cash_totals,payment_methods = totals(database,database.execute('SELECT * FROM orders').fetchall(),from_date,to_date)
+        summary.update(cash_totals)
         return jsonify({
             "period": {"from": from_date, "to": to_date},
             "summary": dict(summary),
@@ -250,7 +258,9 @@ def export_report_csv():
                 csv_safe(row["phone_number"]), csv_safe(row["product_name"]),
                 row["quantity"], row["unit_price"], row["line_total"],
                 row["order_total"], row["order_status"], row["payment_status"],
-                row["payment_method"] or "", row["paid_at"] or "", row["order_date"],
+                row["payment_method"] or "",
+                parse_timestamp(row["paid_at"]).astimezone(NAIROBI).isoformat() if row["paid_at"] else "",
+                parse_timestamp(row["order_date"]).astimezone(NAIROBI).isoformat(),
             ])
 
         range_name = f"{from_date or 'all'}-to-{to_date or 'all'}"

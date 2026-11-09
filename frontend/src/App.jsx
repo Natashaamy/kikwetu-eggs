@@ -14,6 +14,8 @@ import OrdersPage from "./pages/OrdersPage.jsx";
 import ProductsPage from "./pages/ProductsPage.jsx";
 import ReportsPage from "./pages/ReportsPage.jsx";
 
+import FarmExpensesPage from "./pages/FarmExpensesPage.jsx";
+
 function App() {
   return (
     <Routes>
@@ -27,6 +29,7 @@ function App() {
           <Route path="products" element={<ProductsPage />} />
           <Route path="orders" element={<OrdersPage />} />
           <Route path="customers" element={<CustomersPage />} />
+          <Route path="expenses" element={<FarmExpensesPage />} />
           <Route path="reports" element={<ReportsPage />} />
         </Route>
       </Route>

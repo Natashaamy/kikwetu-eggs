@@ -21,6 +21,9 @@ from .routes.orders import orders_bp
 from .routes.products import products_bp
 from .routes.reports import reports_bp
 from .routes.mpesa_payments import mpesa_payments_bp
+from .routes.farm_expenses import expenses_bp
+from .routes.notifications import notifications_bp
+from .routes import financial_summary
 
 
 def create_app(test_config=None):
@@ -36,10 +39,18 @@ def create_app(test_config=None):
         SESSION_COOKIE_SAMESITE="None" if https_enabled else "Lax",
         SESSION_COOKIE_SECURE=https_enabled,
         TRUST_PROXY_HEADERS=https_enabled,
+        APP_ENV=os.environ.get('APP_ENV','development'),
+        MAX_CONTENT_LENGTH=131072,
     )
 
     if test_config is not None:
         app.config.update(test_config)
+
+    if app.config['APP_ENV'] == 'production' and not app.config.get('TESTING'):
+        if not app.config.get('DATABASE_URL') or not os.environ.get('SECRET_KEY'):
+            raise RuntimeError('Production requires DATABASE_URL and a stable SECRET_KEY')
+        if not https_enabled or not app.config['FRONTEND_URL'].startswith('https://'):
+            raise RuntimeError('Production requires FLASK_HTTPS=1 and an HTTPS FRONTEND_URL')
 
     limiter.init_app(app)
 
@@ -51,8 +62,8 @@ def create_app(test_config=None):
         app,
         resources={r"/api/*": {"origins": [frontend_url]}},
         supports_credentials=True,
-        methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type"],
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "Idempotency-Key"],
     )
 
     @app.before_request
@@ -73,6 +84,8 @@ def create_app(test_config=None):
     app.register_blueprint(products_bp)
     app.register_blueprint(reports_bp)
     app.register_blueprint(mpesa_payments_bp)
+    app.register_blueprint(expenses_bp)
+    app.register_blueprint(notifications_bp)
 
     @app.errorhandler(sqlite3.Error)
     def handle_database_error(error):

@@ -1,3 +1,4 @@
+import { formatDate } from "../utils/format.js";
 import { useCallback, useEffect, useState } from "react";
 
 import { getDashboard } from "../api/dashboard.js";
@@ -8,23 +9,11 @@ const currencyFormatter = new Intl.NumberFormat("en-KE", {
   minimumFractionDigits: 0,
 });
 
-const dateFormatter = new Intl.DateTimeFormat("en-KE", {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
 
 function formatAmount(amount) {
   return currencyFormatter.format(Number(amount || 0));
 }
 
-function formatDate(date) {
-  if (!date) {
-    return "Not available";
-  }
-
-  const parsedDate = new Date(`${date.replace(" ", "T")}Z`);
-  return Number.isNaN(parsedDate.getTime()) ? date : dateFormatter.format(parsedDate);
-}
 
 function formatStatus(status) {
   return status.charAt(0).toUpperCase() + status.slice(1);
@@ -58,7 +47,7 @@ function DashboardPage() {
         ["Pending", summary.pending_orders, "pending"],
         ["Completed", summary.completed_orders, "completed"],
         ["Cancelled", summary.cancelled_orders, "cancelled"],
-        ["Products", `${summary.active_products} of ${summary.total_products} active`, "products"],
+        ["Total Products", summary.active_products, "products"],
         ["Low Stock", summary.low_stock_products, "pending"],
         ["Out of Stock", summary.out_of_stock_products, "cancelled"],
         ["Paid Orders", summary.paid_orders, "completed"],

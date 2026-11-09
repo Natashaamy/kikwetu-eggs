@@ -1,3 +1,4 @@
+import TemporaryMessage from "../components/TemporaryMessage.jsx";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
@@ -215,7 +216,7 @@ function CreateOrderPage() {
                 </div>
               </fieldset>
 
-              {formError && <p className="message error-message">{formError}</p>}
+              {formError && <TemporaryMessage className="message error-message">{formError}</TemporaryMessage>}
 
               <button type="submit" disabled={submitting}>
                 {submitting ? (editing ? "Updating your order…" : "Placing your order…") : (editing ? "Update Order" : "Order Now")}

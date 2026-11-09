@@ -1585,3 +1585,29 @@ td strong {
     text-transform: uppercase;
   }
 }
+.finance-filters, .finance-actions { display:flex; flex-wrap:wrap; gap:1rem; align-items:end; margin:1rem 0; }
+.finance-filters label, .expense-form label { display:flex; flex-direction:column; gap:.5rem; }
+.expense-form { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem; margin-top:1rem; }
+.expense-form input, .expense-form select, .expense-form textarea { width:100%; min-width:0; }
+.expense-form output { align-self:center; }
+.message { position:relative; padding-right:3rem; }
+.message-close { position:absolute; right:.5rem; top:.25rem; padding:.25rem .5rem; background:transparent; color:inherit; font-size:1.3rem; }
+.admin-notifications { position:relative; display:flex; justify-content:flex-end; margin-bottom:1rem; }
+.notification-panel { position:absolute; right:0; top:100%; width:min(440px,100%); z-index:20; max-height:70vh; overflow:auto; box-shadow:0 8px 32px #0002; }
+.notification-panel article { padding:1rem 0; border-bottom:1px solid #ddd; }
+.notification-panel article div { display:flex; flex-wrap:wrap; gap:1rem; margin-top:.5rem; }
+.notification-read { opacity:.75; }
+@media(max-width:600px) { .expense-form { grid-template-columns:1fr; } .finance-filters > label { width:100%; } .finance-actions > a { width:100%; text-align:center; } }
+.finance-panel { padding:1.25rem; margin:1rem 0; }
+.finance-panel h2 { margin:0 0 1rem; }
+.finance-panel p { line-height:1.6; }
+.expense-totals caption { text-align:left; padding-bottom:1rem; font-weight:600; }
+.admin-notifications svg { vertical-align:middle; margin-right:.35rem; }
+@media(max-width:600px) {
+  .expense-totals table { display:table; width:100%; }
+  .expense-totals thead { display:table-header-group; }
+  .expense-totals tbody { display:table-row-group; }
+  .expense-totals tr { display:table-row; }
+  .expense-totals th, .expense-totals td { display:table-cell; padding:.75rem .25rem; font-size:.8rem; }
+  .expense-totals td::before { display:none; }
+}

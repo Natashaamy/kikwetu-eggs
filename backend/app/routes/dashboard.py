@@ -6,6 +6,7 @@ from flask import Blueprint, jsonify
 
 from ..db import get_db
 from ..auth import admin_required
+from ..services.payment_records import totals
 
 
 dashboard_bp = Blueprint("dashboard", __name__, url_prefix="/api/dashboard")
@@ -43,6 +44,9 @@ def get_dashboard():
             """
         ).fetchone()
 
+        order_summary = dict(order_summary)
+        cash_totals, _ = totals(database,database.execute('SELECT * FROM orders').fetchall())
+        order_summary.update(cash_totals)
         product_summary = database.execute(
             """
             SELECT

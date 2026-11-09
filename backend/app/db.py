@@ -14,7 +14,7 @@ def _normalize_value(value):
     if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, Decimal):
-        return int(value) if value == value.to_integral_value() else float(value)
+        return str(value)
     return value
 
 
@@ -110,7 +110,7 @@ def get_db():
             if database_url.startswith("postgres://"):
                 database_url = "postgresql://" + database_url[len("postgres://"):]
             try:
-                connection = psycopg.connect(database_url, row_factory=dict_row)
+                connection = psycopg.connect(database_url, row_factory=dict_row, options="-c timezone=UTC")
             except psycopg.Error as error:
                 raise sqlite3.Error("Database connection failed") from error
             g.db = DatabaseAdapter(connection, postgres=True)
